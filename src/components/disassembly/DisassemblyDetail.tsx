@@ -1,25 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { showToast } from '../common/Toast'
 import { useDisassemblyStore } from '../../store/disassemblyStore'
-import {
-  STAGE0_SYSTEM, STAGE1_SYSTEM, STAGE2_SYSTEM,
-  STAGE3_CHARACTER_SYSTEM, STAGE3_PLOT_SYSTEM, STAGE3_WORLD_SYSTEM,
-  STAGE4_SYSTEM, STAGE5_SYSTEM,
-  stage0User, stage2User, stage4User,
-} from '../../services/disassembler'
-
-type StageStatus = 'pending' | 'running' | 'done'
-interface StageDef { key: string; num: number; title: string; desc: string; agent: string }
-
-const STAGES: StageDef[] = [
-  { key: 'stage0', num: 0, title: '概要提取', desc: '识别章节结构，提取 200 字概要', agent: 'Haiku' },
-  { key: 'stage1', num: 1, title: '黄金三章', desc: '深度拆解前三章的钩子、人设、爽点、节奏', agent: 'Sonnet' },
-  { key: 'stage2', num: 2, title: '逐章摘要', desc: '每章提取 10-20 个情节点和出场角色', agent: 'Haiku' },
-  { key: 'stage3', num: 3, title: '聚合分析', desc: '角色档案 + 剧情线 + 世界观体系', agent: 'Sonnet' },
-  { key: 'stage4', num: 4, title: '文风分析', desc: '句法/段落/对话/情绪定量分析 + Few-shot 锚点', agent: 'Sonnet' },
-  { key: 'stage5', num: 5, title: '汇总报告', desc: '五维评分 + 核心套路提炼 + 对标建议', agent: 'Sonnet' },
-]
+import { DISASSEMBLE_SYSTEM, DISASSEMBLE_USER, sampleText, estimateChapters } from '../../services/disassembler'
 
 export default function DisassemblyDetail() {
   const { id } = useParams<{ id: string }>()
@@ -27,13 +10,24 @@ export default function DisassemblyDetail() {
   const { updateStage } = useDisassemblyStore()
 
   const [project, setProject] = useState<any>(null)
-  const [stageStatus, setStageStatus] = useState<Record<string, StageStatus>>({})
-  const [stageResults, setStageResults] = useState<Record<string, string>>({})
-  const [expandedStage, setExpandedStage] = useState<string | null>(null)
-  const [editingStage, setEditingStage] = useState<string | null>(null)
-  const [editText, setEditText] = useState('')
+  const [result, setResult] = useState<string>('')
+  const [sections, setSections] = useState<{ title: string; content: string }[]>([])
+  const [running, setRunning] = useState(false)
+  const cancelledRef = useRef(false)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
+  const [editingSection, setEditingSection] = useState<number | null>(null)
+  const [editSectionText, setEditSectionText] = useState('')
+
+  // 离开时取消
+  useEffect(() => {
+    return () => {
+      if (running) {
+        cancelledRef.current = true
+        window.electronAPI?.cancelAi()
+      }
+    }
+  })
 
   useEffect(() => {
     (async () => {
@@ -45,88 +39,93 @@ export default function DisassemblyDetail() {
         if (proj) {
           setProject(proj)
           const results = typeof proj.stage_results === 'string' ? JSON.parse(proj.stage_results) : (proj.stage_results || {})
-          setStageResults(results)
-          const st: Record<string, StageStatus> = {}
-          STAGES.forEach(s => { st[s.key] = results[s.key] ? 'done' : 'pending' })
-          setStageStatus(st)
+          // 检查是否已经完成拆文（v2 单次结果存在 'result' 字段中，或旧版 stage5）
+          const fullResult = results.result || results.stage5 || ''
+          if (fullResult) {
+            setResult(fullResult)
+            setSections(parseSections(fullResult))
+          }
         }
       } catch (e: any) { setError(e.message || String(e)) }
       setLoaded(true)
     })()
   }, [id])
 
-  const startEditStage = (key: string, content: string) => { setEditingStage(key); setEditText(content) }
-  const saveEditStage = async (key: string, stageNum: number) => {
+  /** 将拆文结果按 ## 标题拆分为可分段编辑的 section */
+  const parseSections = (text: string) => {
+    const secs: { title: string; content: string }[] = []
+    const parts = text.split(/(?=^## )/m)
+    for (const part of parts) {
+      const match = part.match(/^## (.+)/m)
+      if (match) {
+        secs.push({ title: match[1].trim(), content: part.trim() })
+      } else if (part.trim()) {
+        // 没有 ## 标题的内容放在第一个"概述"section
+        if (secs.length === 0) secs.push({ title: '概述', content: part.trim() })
+        else secs[secs.length - 1].content += '\n\n' + part.trim()
+      }
+    }
+    return secs
+  }
+
+  const saveSectionEdit = async (idx: number) => {
     if (!project || !window.electronAPI) return
-    await updateStage(project.id, stageNum, editText)
-    setStageResults(prev => ({ ...prev, [key]: editText }))
-    setEditingStage(null)
+    const newSections = sections.map((s, i) => i === idx ? { ...s, content: editSectionText } : s)
+    const newResult = newSections.map(s => `## ${s.title}\n\n${s.content}`).join('\n\n')
+    const newResults = { result: newResult, total_chapters: project.total_chapters }
+    await window.electronAPI.db.run(
+      'UPDATE disassembly_projects SET stage_results = ? WHERE id = ?',
+      [JSON.stringify(newResults), project.id]
+    )
+    setSections(newSections)
+    setResult(newResult)
+    setEditingSection(null)
     showToast('success', '已保存')
   }
 
-  const runStage = async (stage: StageDef) => {
+  const runDisassembly = async () => {
     if (!project || !window.electronAPI) return
-    setStageStatus(prev => ({ ...prev, [stage.key]: 'running' }))
-    setExpandedStage(stage.key)
+    setRunning(true)
+    cancelledRef.current = false
     try {
       const sourceText = project.source_text || ''
-      let reply = ''
+      const totalChars = sourceText.length
+      const totalChapters = estimateChapters(sourceText)
 
-      if (stage.key === 'stage0') {
-        reply = await window.electronAPI.aiChat([
-          { role: 'system', content: STAGE0_SYSTEM },
-          { role: 'user', content: stage0User(sourceText) },
-        ], '拆文-概要')
-        try {
-          const json = JSON.parse(reply.match(/\{[\s\S]*\}/)?.[0] || reply)
-          await window.electronAPI.db.run('UPDATE disassembly_projects SET total_chapters = ? WHERE id = ?', [json.total_chapters || 0, project.id])
-        } catch {}
-      } else if (stage.key === 'stage1') {
-        reply = await window.electronAPI.aiChat([
-          { role: 'system', content: STAGE1_SYSTEM },
-          { role: 'user', content: `请深度拆解黄金三章。原文前12000字：\n---\n${sourceText.slice(0, 12000)}\n---\n从开篇钩子、人设、冲突、爽点、节奏五个维度分析。` },
-        ], '拆文-黄金三章')
-      } else if (stage.key === 'stage2') {
-        const totalChapters = project.total_chapters || 30
-        const allResults: string[] = []
-        for (let batch = 0; batch < Math.min(totalChapters, 30); batch += 10) {
-          const batchChapters = Array.from({ length: Math.min(10, Math.min(totalChapters, 30) - batch) }, (_, i) => `第 ${batch + i + 1} 章`).join('、')
-          const r = await window.electronAPI.aiChat([
-            { role: 'system', content: STAGE2_SYSTEM },
-            { role: 'user', content: `提取以下章节摘要：${batchChapters}\n${batch === 0 ? `原文参考：\n${sourceText.slice(0, 8000)}` : ''}\n输出 JSON 数组。` },
-          ], '拆文-逐章摘要')
-          allResults.push(r)
-        }
-        reply = allResults.join('\n\n')
-      } else if (stage.key === 'stage3') {
-        const summaries = stageResults.stage2 || stageResults.stage0 || sourceText.slice(0, 10000)
-        const [cr, pr, wr] = await Promise.all([
-          window.electronAPI.aiChat([{ role: 'system', content: STAGE3_CHARACTER_SYSTEM }, { role: 'user', content: `基于摘要建立角色档案：\n${summaries.slice(0, 15000)}` }], '拆文-角色'),
-          window.electronAPI.aiChat([{ role: 'system', content: STAGE3_PLOT_SYSTEM }, { role: 'user', content: `基于摘要分析剧情：\n${summaries.slice(0, 15000)}` }], '拆文-剧情'),
-          window.electronAPI.aiChat([{ role: 'system', content: STAGE3_WORLD_SYSTEM }, { role: 'user', content: `基于摘要梳理世界观：\n${summaries.slice(0, 15000)}` }], '拆文-世界观'),
-        ])
-        reply = `# 角色分析\n${cr}\n\n---\n\n# 剧情分析\n${pr}\n\n---\n\n# 世界观分析\n${wr}`
-      } else if (stage.key === 'stage4') {
-        reply = await window.electronAPI.aiChat([
-          { role: 'system', content: STAGE4_SYSTEM },
-          { role: 'user', content: stage4User(sourceText) },
-        ], '拆文-文风')
-      } else if (stage.key === 'stage5') {
-        const allContent = STAGES.filter(s => s.key !== 'stage5' && stageResults[s.key])
-          .map(s => `## ${s.title}\n${(stageResults[s.key] || '').slice(0, 3000)}`).join('\n\n---\n\n')
-        reply = await window.electronAPI.aiChat([
-          { role: 'system', content: STAGE5_SYSTEM },
-          { role: 'user', content: `整合拆解成果：\n${allContent}\n\n请输出完整的拆文报告。` },
-        ], '拆文-汇总')
-      }
+      // 更新章节数
+      await window.electronAPI.db.run(
+        'UPDATE disassembly_projects SET total_chapters = ? WHERE id = ?',
+        [totalChapters, project.id]
+      )
 
-      await updateStage(project.id, stage.num, reply)
-      setStageResults(prev => ({ ...prev, [stage.key]: reply }))
-      setStageStatus(prev => ({ ...prev, [stage.key]: 'done' }))
-      showToast('success', `${stage.title} 完成！`)
+      // 智能采样
+      const sampled = sampleText(sourceText)
+      const sampledChars = sampled.length
+
+      showToast('info', `全文 ${totalChars.toLocaleString()} 字 → 采样 ${sampledChars.toLocaleString()} 字 (${(sampledChars / totalChars * 100).toFixed(1)}%) → AI 分析中...`)
+
+      // 单次 AI 调用
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: DISASSEMBLE_SYSTEM },
+        { role: 'user', content: DISASSEMBLE_USER(sampled, totalChapters, totalChars) },
+      ], '拆文分析')
+
+      if (cancelledRef.current) return
+
+      // 保存结果
+      const newResults = { result: reply, sampled_chars: sampledChars, total_chars: totalChars, total_chapters: totalChapters }
+      await window.electronAPI.db.run(
+        'UPDATE disassembly_projects SET stage_results = ?, current_stage = 5, updated_at = datetime(\'now\',\'localtime\') WHERE id = ?',
+        [JSON.stringify(newResults), project.id]
+      )
+      setResult(reply)
+      setSections(parseSections(reply))
+      showToast('success', '拆文完成！')
     } catch (e: any) {
-      setStageStatus(prev => ({ ...prev, [stage.key]: 'pending' }))
-      showToast('error', `${stage.title} 失败：${e.message || '未知'}`)
+      if (cancelledRef.current) showToast('info', '已取消拆文')
+      else showToast('error', '拆文失败：' + (e.message || '未知'))
+    } finally {
+      setRunning(false)
     }
   }
 
@@ -147,94 +146,73 @@ export default function DisassemblyDetail() {
         </div>
       </div>
 
-      {/* 管线进度条 */}
-      <div className="flex items-center gap-1 mb-6 overflow-x-auto pb-2">
-        {STAGES.map((s, i) => (
-          <div key={s.key} className="flex items-center gap-1 shrink-0">
-            {i > 0 && <div className={`w-4 h-0.5 ${stageStatus[s.key] === 'done' ? 'bg-primary' : 'bg-border'}`} />}
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0
-              ${stageStatus[s.key] === 'done' ? 'bg-primary text-white' :
-                stageStatus[s.key] === 'running' ? 'bg-warning text-white animate-pulse' : 'bg-border text-text-placeholder'}`}
-              title={s.title}>
-              {stageStatus[s.key] === 'done' ? '✓' : stageStatus[s.key] === 'running' ? '⏳' : s.num}
+      {/* 一键拆文按钮 */}
+      <div className="mb-6">
+        {running ? (
+          <div className="flex items-center gap-3 px-4 py-3 bg-primary-light/10 border border-primary/30 rounded-card">
+            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <div>
+              <p className="text-sm font-medium text-primary">AI 正在分析中...</p>
+              <p className="text-xs text-text-secondary mt-0.5">智能采样已经完成，正在调用 AI 一次性分析全部维度</p>
             </div>
+            <button onClick={() => { cancelledRef.current = true; window.electronAPI?.cancelAi() }}
+              className="ml-auto px-3 py-1.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">
+              ⏹ 取消
+            </button>
           </div>
-        ))}
+        ) : (
+          <button onClick={runDisassembly}
+            className="w-full px-4 py-3 text-sm bg-primary text-white rounded-card hover:bg-primary-hover transition-colors">
+            {result ? '🔄 重新拆文' : '🤖 开始拆文（一键完成全部分析）'}
+          </button>
+        )}
       </div>
 
-      {/* 阶段卡片 */}
-      <div className="space-y-3">
-        {STAGES.map(stage => {
-          const isRunning = stageStatus[stage.key] === 'running'
-          const isDone = stageStatus[stage.key] === 'done'
-          const isExpanded = expandedStage === stage.key
-          const canRun = stage.key === 'stage0' || stageStatus[STAGES[STAGES.findIndex(s => s.key === stage.key) - 1]?.key] === 'done'
-
-          return (
-            <div key={stage.key} className={`bg-white rounded-card border ${isRunning ? 'border-warning shadow-md' : 'border-border'}`}>
-              <div className="flex items-center gap-4 px-4 py-3">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0
-                  ${isDone ? 'bg-primary text-white' : isRunning ? 'bg-warning text-white' : 'bg-border text-text-placeholder'}`}>
-                  {isDone ? '✓' : isRunning ? '⏳' : stage.num}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-body font-medium text-text-main">{stage.title}</h3>
-                    <span className="text-caption text-text-placeholder">· {stage.agent}</span>
-                  </div>
-                  <p className="text-caption text-text-secondary">{stage.desc}</p>
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  {isDone && (
-                    <button onClick={() => setExpandedStage(isExpanded ? null : stage.key)}
-                      className="px-2 py-1 text-caption border border-border-input rounded-btn text-text-secondary hover:bg-bg-secondary">
-                      {isExpanded ? '收起' : '查看'}
-                    </button>
-                  )}
-                  {!isDone && !isRunning && (
-                    <button onClick={() => runStage(stage)} disabled={!canRun}
-                      className={`px-3 py-1 text-caption rounded-btn ${canRun ? 'bg-primary text-white hover:bg-primary-hover' : 'bg-border text-text-placeholder cursor-not-allowed'}`}>
-                      开始
-                    </button>
-                  )}
-                  {isRunning && (
-                    <div className="flex items-center gap-2 px-3 py-1 text-caption text-warning">
-                      <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" />运行中...
+      {/* 结果展示 — 分段编辑 */}
+      {sections.length > 0 && (
+        <div className="space-y-3">
+          {sections.map((sec, idx) => {
+            const isEditing = editingSection === idx
+            return (
+              <div key={idx} className="bg-white rounded-card border border-border overflow-hidden">
+                <div className="px-4 py-2.5 bg-bg-secondary border-b border-border flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-text-main">{sec.title}</h3>
+                  {isEditing ? (
+                    <div className="flex gap-2">
+                      <button onClick={() => saveSectionEdit(idx)} className="text-xs text-primary hover:underline">💾 保存</button>
+                      <button onClick={() => setEditingSection(null)} className="text-xs text-text-placeholder hover:underline">取消</button>
                     </div>
+                  ) : (
+                    <button onClick={() => { setEditingSection(idx); setEditSectionText(sec.content) }}
+                      className="text-xs text-primary hover:underline">✏️ 编辑</button>
+                  )}
+                </div>
+                <div className="p-4">
+                  {isEditing ? (
+                    <textarea value={editSectionText} onChange={e => setEditSectionText(e.target.value)}
+                      rows={Math.max(6, sec.content.split('\n').length)}
+                      className="w-full px-3 py-2 text-xs border border-primary rounded-btn resize-y font-mono focus:outline-none" />
+                  ) : (
+                    <pre className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed max-h-80 overflow-auto"
+                      onClick={() => { setEditingSection(idx); setEditSectionText(sec.content) }}
+                      title="点击编辑">
+                      {sec.content}
+                    </pre>
                   )}
                 </div>
               </div>
-              {isExpanded && isDone && stageResults[stage.key] && (
-                <div className="border-t border-border px-4 py-3">
-                  {editingStage === stage.key ? (
-                    <div>
-                      <textarea value={editText} onChange={(e) => setEditText(e.target.value)}
-                        className="w-full h-48 px-3 py-2 text-xs border border-primary rounded-btn resize-y font-mono" />
-                      <div className="flex gap-2 mt-2">
-                        <button onClick={() => saveEditStage(stage.key, stage.num)}
-                          className="px-3 py-1 text-xs bg-primary text-white rounded-btn">💾 保存</button>
-                        <button onClick={() => setEditingStage(null)}
-                          className="px-3 py-1 text-xs border border-border-input rounded-btn">取消</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div>
-                      <div className="flex justify-end mb-1">
-                        <button onClick={() => startEditStage(stage.key, stageResults[stage.key])}
-                          className="text-xs text-primary hover:underline">✏️ 编辑</button>
-                      </div>
-                      <pre className="text-caption text-text-secondary whitespace-pre-wrap leading-relaxed max-h-96 overflow-auto">
-                        {(stageResults[stage.key] || '').slice(0, 5000)}
-                        {(stageResults[stage.key] || '').length > 5000 && '\n\n... (内容已截断)'}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
+
+      {!result && !running && (
+        <div className="text-center py-12 text-text-placeholder text-sm">
+          <p className="mb-2">📚</p>
+          <p>点击上方按钮，一键完成全部拆文分析</p>
+          <p className="text-xs mt-1">智能采样 → AI 一次性分析 → 角色 · 剧情 · 文风 · 评分</p>
+        </div>
+      )}
     </div>
   )
 }

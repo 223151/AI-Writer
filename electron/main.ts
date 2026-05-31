@@ -154,7 +154,6 @@ function registerIpcHandlers() {
         temperature: 0.7,
         max_tokens: 4096,
         stream: true,
-        stream_options: { include_usage: true },
       }, { signal: currentAbortController.signal })
 
       let fullContent = ''
@@ -185,7 +184,6 @@ function registerIpcHandlers() {
 
       mainWindow?.webContents.send('ai:stream-chunk', { chunk: '', done: true, usage: { promptTokens, outputTokens, cachedTokens } })
       recordTokenUsage(purpose || '', config.model, promptTokens, outputTokens, cachedTokens)
-      notifyTokenUsage(purpose || '', config.model, promptTokens, cachedTokens, outputTokens)
       return fullContent
     } catch (err: any) {
       if (err?.name === 'AbortError' || err?.message?.includes('abort')) {

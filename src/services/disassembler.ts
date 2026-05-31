@@ -1,287 +1,175 @@
 /**
- * 拆文库服务
- * 对标 oh-story-claudecode story-long-analyze
+ * 拆文库服务 v2
+ * 智能采样 + 单次 AI 调用，适合处理百万字级小说
  *
- * 管线: Stage 0→1→2→3→4→5
- *   0: 概要提取 + 章节识别
- *   1: 黄金三章深度拆解
- *   2: 逐章摘要提取
- *   3: 聚合分析（角色/剧情/设定）
- *   4: 文风分析
- *   5: 汇总报告
+ * 策略：
+ * 1. 本地智能采样（开头+结尾+每隔N章抽关键段）
+ * 2. 单次 AI 调用返回完整结构化分析
+ * 3. 采样总长度控制在 50000 字符以内，确保低 token 消耗
  */
 
-// ==================== Stage 0: 概要提取 ====================
+/**
+ * 清理文本中的危险控制字符和非法转义序列
+ * 移除所有 \x 和 \u 序列（这些在通过 API JSON 传输时会出错）
+ */
+function sanitizeText(text: string): string {
+  return text
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '') // 移除控制字符
+    .replace(/\\x[0-9a-fA-F]{0,2}/g, '')               // 移除所有 \x 序列（完整或不完整）
+    .replace(/\\u[0-9a-fA-F]{0,4}/g, '')               // 移除所有 \u 序列
+    .replace(/\0/g, '')                                  // 空字符
+}
 
-export const STAGE0_SYSTEM = `你是一位网络小说结构分析师。你的任务是快速浏览小说文本，提取概要信息和章节结构。
+/**
+ * 从全文智能采样，提取代表性片段
+ * @param text 完整原文
+ * @returns 采样后的文本（≤50000字）
+ */
+export function sampleText(text: string): string {
+  const MAX_LENGTH = 50000
+  const clean = sanitizeText(text)
+  if (clean.length <= MAX_LENGTH) return clean
 
-## 任务
-1. 识别小说的章节边界（如何分章）
-2. 写一段 200 字的概要（thin first-pass：只写你确定的，不确定的不写）
-3. 生成章节索引表（每章：章节号、标题、起始位置标记）
+  const parts: string[] = []
 
-## 输出格式
-严格的 JSON：
-{
-  "title": "书名",
-  "author": "作者（如果能识别）",
-  "total_chapters": 章节数,
-  "summary_200": "200字概要",
-  "chapters": [
-    { "number": 1, "title": "章节标题", "start_marker": "本章前20字" },
-    ...
-  ]
-}`
+  // 1. 开头 4000 字（黄金三章核心区域）
+  parts.push('=== 开篇（黄金三章） ===')
+  parts.push(clean.slice(0, 4000))
 
-// ==================== Stage 1: 黄金三章深度拆解 ====================
+  // 2. 结尾 2000 字
+  parts.push('\n\n=== 结尾 ===')
+  parts.push(clean.slice(-2000))
 
-export const STAGE1_SYSTEM = `你是爆款网文结构分析师，专攻"黄金三章"（前3章）深度拆解。
+  // 3. 中间均匀采样
+  const remaining = MAX_LENGTH - parts.join('\n').length - 200
+  const mid = clean.slice(4000, -2000)
+  const sampleCount = Math.min(40, Math.floor(remaining / 600))
+  const step = Math.floor(mid.length / sampleCount)
 
-## 拆解维度
-
-### 1. 开篇钩子
-- 第一句话/第一段是什么？用了什么钩子类型？
-  - 悬念钩子（抛出一个谜题）
-  - 冲突钩子（直接展示矛盾）
-  - 身份钩子（揭示特殊身份/能力）
-  - 情绪钩子（制造强烈情绪）
-  - 世界观钩子（展示新奇设定）
-- 钩子效果：读者为什么想继续读？
-
-### 2. 人设建立
-- 主角出场方式（行动中/日常中/危机中/回忆中）
-- 核心性格特征 + 原文证据
-- 欲望/目标 + 原文证据
-- 缺陷/弱点 + 原文证据
-- 读者为什么关心这个主角？
-
-### 3. 冲突设计
-- 核心对抗面是什么？（人vs人 / 人vs社会 / 人vs自身 / 抽象对抗）
-- 冲突的紧迫感来源
-- 小冲突→大冲突的升级路径
-
-### 4. 爽点设计
-- 本章有没有爽点？什么类型？
-  - 打脸爽（逆袭/打脸反派）
-  - 身份爽（隐藏身份被揭示）
-  - 成长爽（获得能力/突破）
-  - 智斗爽（计谋成功）
-  - 感情爽（感情线推进）
-- 爽点的节奏安排
-
-### 5. 节奏控制
-- 本章的叙事节奏（快/慢/张弛）
-- 对话比例 vs 描写比例 vs 动作比例
-- 章节结尾的悬念/钩子
-
-## 输出格式
-Markdown 报告，每个维度用具体原文引用佐证。`
-
-// ==================== Stage 2: 逐章摘要 ====================
-
-export const STAGE2_SYSTEM = `你是高效的小说章节摘要提取器。逐章提取关键信息。
-
-## 每章提取
-- 情节点（10-20个关键剧情步骤，每个简短一句话）
-- 出场角色（只列有名字/有戏份的）
-- 本章功能（推进主线/展开支线/建立设定/角色成长/爽点释放/过渡铺垫）
-
-## 输出格式
-严格的 JSON 数组：
-[
-  {
-    "chapter_number": 1,
-    "plot_points": ["情节点1", "情节点2", ...],
-    "characters": ["角色名1", "角色名2"],
-    "function": "推进主线",
-    "key_event": "本章最重要的一件事"
+  parts.push(`\n\n=== 中间章节采样（共 ${sampleCount} 个片段） ===`)
+  for (let i = 0; i < sampleCount; i++) {
+    const start = i * step
+    const snippet = sanitizeText(mid.slice(start, start + 500))
+    if (snippet.trim()) {
+      parts.push(`\n[片段 ${i + 1}]\n${snippet}`)
+    }
   }
-]`
 
-// ==================== Stage 3: 聚合分析 ====================
-
-export const STAGE3_CHARACTER_SYSTEM = `你是角色分析师。基于逐章摘要和原文，建立完整的角色档案。
-
-## 每个角色提取
-- 基本信息（姓名/年龄/身份/首次出场章节）
-- 性格特征 + 原文行为证据
-- 核心动机/目标
-- 角色弧线（从开始到现在的变化）
-- 与其他角色的关系
-- 语言风格/口头禅
-- 关键台词/行动
-
-## 角色分级
-- 核心角色（主角+主要对手+核心盟友）：完整档案
-- 功能角色（导师/帮手/信使等）：简要档案
-- 龙套：略过
-
-## 输出：为每个核心角色生成独立 Markdown 文件内容`
-
-export const STAGE3_PLOT_SYSTEM = `你是剧情分析师。识别小说的剧情线和故事结构。
-
-## 分析维度
-1. **剧情线识别**：主线 + 支线（各起什么作用？）
-2. **故事结构**：三幕/四幕/英雄之旅/其他
-3. **关键转折点**：激励事件、转折、高潮的位置
-4. **伏笔追踪**：已埋下的伏笔和已回收的伏笔
-5. **节奏曲线**：紧张-舒缓的交替模式
-
-## 输出：Markdown 报告`
-
-export const STAGE3_WORLD_SYSTEM = `你是世界观分析师。梳理小说的设定体系。
-
-## 分析维度
-1. **背景设定**：时代/世界/社会环境
-2. **力量体系**：修炼/魔法/科技等能力系统的规则
-3. **地理**：重要地点及其意义
-4. **势力分布**：各方势力及其关系
-5. **金手指/特殊设定**：主角的特殊优势
-
-## 输出：Markdown 报告`
-
-// ==================== Stage 4: 文风分析 ====================
-
-export const STAGE4_SYSTEM = `你是网文文风定量分析师。精确分析小说的写作风格，提供可用于AI写作的风格参考。
-
-## 分析维度
-
-### 1. 句法特征
-- 平均句长（字数）
-- 句长分布（短句<15字 / 中句15-30字 / 长句>30字 的比例）
-- 标点使用特征（逗号密度、句号密度、感叹号/问号使用频率）
-
-### 2. 段落特征
-- 平均段落句数
-- 段落长度分布
-- 独句成段的频率和场景
-
-### 3. 对话特征
-- 对话占比（对话字数/总字数）
-- 对话标签使用率（"说/道/问"的出现频率）
-- 对话与动作的配合模式
-- 潜台词的密度
-
-### 4. 情绪表达
-- 情绪词密度
-- 展示vs告知的比例（动作描写 vs 直接情绪陈述）
-- 比喻的使用频率和类型
-
-### 5. 节奏特征
-- 场景切换频率
-- 高潮低谷交替模式
-- 章节结尾类型分布（悬念/平静/预告）
-
-### 6. Few-shot 锚点
-从原文提取 5-10 个代表性段落，覆盖：
-- 开篇段落
-- 爽点/高潮段落
-- 日常/过渡段落
-- 对话场景
-- 情绪场景
-
-## 输出：Markdown 报告，作为风格库的增强版参考文件`
-
-// ==================== Stage 5: 汇总报告 ====================
-
-export const STAGE5_SYSTEM = `你是网文拆解汇总专家。整合所有前序分析，输出一份完整的拆文报告。
-
-## 报告结构
-1. **五维评分**（每项 1-10 分，附 2-3 句理由）
-   - 开篇吸引力
-   - 人设立体度
-   - 爽点密度
-   - 节奏控制
-   - 世界观完整度
-
-2. **核心套路提炼**
-   - 这本书最关键的 3-5 个可复用的写作套路
-   - 每个套路用"模板化"语言描述（可直接用于其他书）
-
-3. **对标建议**
-   - 适合什么类型的作者学习
-   - 哪些部分不建议模仿（如设定过于复杂/节奏过于特殊）
-
-## 输出：Markdown 报告`
-
-// ==================== 辅助：拆解用户提示 ====================
-
-export function stage0User(text: string): string {
-  return `请分析以下小说，提取概要信息和章节结构：
-
----
-${text.slice(0, 15000)}
----
-
-输出 JSON 格式。`
+  return parts.join('\n').slice(0, MAX_LENGTH)
 }
 
-export function stage1User(text: string, chapterNum: 1 | 2 | 3): string {
-  const startMarkers: Record<number, string> = {
-    1: '开头',
-    2: '第2章',
-    3: '第3章',
+/**
+ * 估算章节数（本地扫描，不用AI）
+ */
+export function estimateChapters(text: string): number {
+  // 匹配 "第X章" "Chapter X" 等模式
+  const cnMatch = text.match(/第[一二三四五六七八九十百千0-9]+章/g)
+  if (cnMatch && cnMatch.length > 5) return cnMatch.length
+
+  // 匹配 "### Chapter" 或换行+数字+标题的模式
+  const lines = text.split('\n')
+  let count = 0
+  for (const line of lines) {
+    if (/^\s*(第[一二三四五六七八九十百千0-9]+[章回节]|Chapter\s+\d+|^\d+[\.\、]\s+\S)/i.test(line)) {
+      count++
+    }
   }
-  return `请深度拆解本书的第 ${chapterNum} 章（${startMarkers[chapterNum]}）。
-
-原文：
----
-${text.slice(0, 12000)}
----
-
-请输出该章的深度拆解报告。`
+  return count > 5 ? count : Math.ceil(text.length / 4000) // fallback: ~4000字/章
 }
 
-export function stage2User(chapterText: string, chapterNum: number, chapterTitle: string): string {
-  return `请提取本章的情节点和关键信息：
+// ==================== 单次拆文 Prompt ====================
 
-第 ${chapterNum} 章${chapterTitle ? '：' + chapterTitle : ''}
+export const DISASSEMBLE_SYSTEM = `你是专业网文拆解分析师。你需要根据提供的全文智能采样，一次性完成全部拆解分析。
 
----
-${chapterText.slice(0, 8000)}
----
+## 分析要求
 
-输出 JSON 格式。`
-}
+### 1. 概要（summary）
+- 书名和作者（如果能识别）
+- 200字以内的全书概要
+- 总章节数和字数估算
 
-export function stage3CharacterUser(allSummaries: string): string {
-  return `以下是全书的逐章摘要：
+### 2. 黄金三章分析（golden3）
+- 开篇钩子类型和效果
+- 主角人设建立方式
+- 核心冲突引入
+- 爽点设计
 
-${allSummaries.slice(0, 20000)}
+### 3. 章节结构（chapter_structure）
+- 故事分为几个大阶段（幕/卷）
+- 每个阶段的关键事件
 
-请建立所有核心角色的完整档案。`
-}
+### 4. 角色分析（characters）
+- 核心角色列表（主角、反派、盟友），每人50-100字描述
+- 角色之间的关系
 
-export function stage3PlotUser(allSummaries: string): string {
-  return `以下是全书的逐章摘要：
+### 5. 剧情分析（plot）
+- 主线和支线
+- 关键转折点
+- 伏笔设计
 
-${allSummaries.slice(0, 20000)}
+### 6. 世界观分析（world）
+- 时代/世界背景
+- 力量体系/特殊设定
+- 重要地点和势力
 
-请分析剧情线和故事结构。`
-}
+### 7. 文风分析（style）
+- 句式特点（短句/长句比例）
+- 段落配比（短段/中段/长段比例）
+- 对话占比
+- 情绪表达方式
+- 3-5个代表性段落原文引用
 
-export function stage3WorldUser(allSummaries: string): string {
-  return `以下是全书的逐章摘要：
+### 8. 五维评分 + 套路提炼（report）
+- 开篇吸引力(1-10)、人设立体度(1-10)、爽点密度(1-10)、节奏控制(1-10)、世界观完整度(1-10)
+- 3-5个可复用的写作套路
 
-${allSummaries.slice(0, 20000)}
+## 输出格式
+必须使用以下 Markdown 格式输出（每个 ## 二级标题代表一个分析维度），不要用JSON：
 
-请梳理世界观和设定体系。`
-}
+## 概要
+（书名、作者、200字概要、章节数）
 
-export function stage4User(text: string): string {
-  return `请对以下小说的写作风格进行定量分析：
+## 黄金三章分析
+（开篇钩子、人设建立、冲突引入、爽点设计）
 
----
-${text.slice(0, 25000)}
----
+## 角色分析
+（核心角色列表、性格特征、关系网络）
 
-请输出文风分析报告，必须包含 Few-shot 锚点段落（5-10个代表性段落原文引用）。`
-}
+## 剧情分析
+（主线支线、关键转折点、伏笔设计）
 
-export function stage5User(allReports: string): string {
-  return `以下是之前所有阶段的拆解成果：
+## 世界观分析
+（时代背景、力量体系、重要地点势力）
 
-${allReports.slice(0, 15000)}
+## 文风分析
+（句式特点、段落配比、对话占比、情绪表达、代表性段落原文引用）
 
-请整合输出完整的拆文报告，包含五维评分和核心套路提炼。`
-}
+## 评分与套路
+（五维评分 + 3-5个可复用套路）
+
+控制总输出在 3000 字以内，每个维度尽量精简。`
+
+export const DISASSEMBLE_USER = (sampledText: string, totalChapters: number, totalChars: number) =>
+  `【全文采样数据】
+原文总字数：约 ${totalChars.toLocaleString()} 字
+预估章节数：${totalChapters} 章
+采样策略：开头4000字 + 结尾2000字 + 全书均匀40段采样
+
+【采样内容】
+${sampledText}
+
+请从采样中提取完整拆解分析，严格按照 System Prompt 中的 7 个 ## 二级标题输出 Markdown 格式。
+如果某个维度信息不足，可标注"从采样中无法确定"。核心分析必须基于采样内容给出。`
+
+// 保留旧版 stage 函数供兼容
+export const STAGE0_SYSTEM = ''
+export const STAGE1_SYSTEM = ''
+export const STAGE2_SYSTEM = ''
+export const STAGE3_CHARACTER_SYSTEM = ''
+export const STAGE3_PLOT_SYSTEM = ''
+export const STAGE3_WORLD_SYSTEM = ''
+export const STAGE4_SYSTEM = ''
+export const STAGE5_SYSTEM = ''
+export function stage0User(t: string) { return '' }
+export function stage2User(t: string) { return '' }
+export function stage4User(t: string) { return '' }

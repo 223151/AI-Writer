@@ -21,7 +21,15 @@ import type { DisassemblyProject } from '../../store/disassemblyStore'
 // ===== 类型 =====
 interface Volume {
   volume_number: number; title: string; summary: string
-  chapter_range: [number, number]; theme: string; key_events: string[]
+  chapter_range: [number, number]; theme: string
+  key_events: string[]
+  detailed_summary?: string
+  character_arcs?: string
+  key_events_str?: string
+  emotional_curve?: string
+  foreshadowing?: string
+  foreshadowing_planted?: string[]
+  foreshadowing_recovered?: string[]
 }
 interface ChapterPlan {
   chapter_number: number; title: string; summary: string
@@ -114,6 +122,12 @@ export default function Workspace() {
   // 流式生成
   const [streamingText, setStreamingText] = useState('')
   const cancelledRef = useRef(false)
+  const generatingRef = useRef(false)
+  const reviewingRef = useRef(false)
+
+  // 同步 ref
+  useEffect(() => { generatingRef.current = generating }, [generating])
+  useEffect(() => { reviewingRef.current = reviewing }, [reviewing])
   const cancelStreamRef = useRef<(() => void) | null>(null)
 
   const handleCancel = () => {
@@ -177,6 +191,16 @@ export default function Workspace() {
   }, [id])
 
   useEffect(() => { loadAll() }, [loadAll])
+
+  // 离开工作台时自动取消正在运行的生成（不弹toast，由catch处理）
+  useEffect(() => {
+    return () => {
+      if (generatingRef.current || reviewingRef.current) {
+        cancelledRef.current = true
+        window.electronAPI?.cancelAi()
+      }
+    }
+  }, [])
 
   // 切换章节
   const switchChapter = async (num: number) => {
@@ -299,32 +323,65 @@ export default function Workspace() {
   const confirmGen = () => {
     const config = { primaryStyleId, auxIds: auxiliaryStyleIds, dissIds: disassemblyIds }
     if (showGenPanel === 'outline') genOutline(config, genHint)
-    else if (showGenPanel === 'volumes') genVolumes()
+    else if (showGenPanel === 'volumes') genSingleVolume()
     else if (showGenPanel === 'chapter') genChapter(selectedChapter, config, genHint)
   }
 
-  /** 生成卷纲 — 读：大纲+风格+拆文 */
-  const genVolumes = async () => {
+  /** 生成单卷卷纲 — 读：大纲+前卷+风格+拆文 */
+  const genSingleVolume = async () => {
     if (!outlineContent) { showToast('error', '请先生成大纲'); return }
     if (!window.electronAPI) return
+    const total = chapterPlans.length || 40
+    const nextVolNum = volumes.length + 1
     setGenerating(true)
     try {
-      const total = chapterPlans.length || 40
       const { styleContext, disassemblyContext, cardContext } = getRefs()
       let enrichedOutline = outlineContent
       if (styleContext) enrichedOutline += '\n\n【风格】\n' + styleContext
       if (disassemblyContext) enrichedOutline += '\n\n【拆文】\n' + disassemblyContext
       if (cardContext) enrichedOutline += '\n\n【角色与世界设定】\n' + cardContext.slice(0, 1500)
+
+      // 前一卷的上下文
+      let prevVolContext = '', prevChapterPlansStr = ''
+      const prevVol = volumes.length > 0 ? volumes[volumes.length - 1] : null
+      if (prevVol) {
+        prevVolContext = `第${prevVol.volume_number}卷《${prevVol.title}》\n主题：${prevVol.theme}\n${prevVol.detailed_summary || prevVol.summary}`
+        const prevPlans = chapterPlans.filter(p => p.chapter_number >= prevVol.chapter_range[0] && p.chapter_number <= prevVol.chapter_range[1])
+        if (prevPlans.length) {
+          prevChapterPlansStr = prevPlans.map(p => `第${p.chapter_number}章 ${p.title}: ${p.summary}`).join('\n')
+        }
+      }
+
       cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: VOLUME_OUTLINE_SYSTEM },
-        { role: 'user', content: VOLUME_OUTLINE_USER(enrichedOutline, total) },
+        { role: 'user', content: VOLUME_OUTLINE_USER(enrichedOutline, total, nextVolNum, prevVolContext, prevChapterPlansStr) },
       ], '卷纲生成')
       if (cancelledRef.current) return
-      const jm = reply.match(/```json\s*([\s\S]*?)\s*```/) || reply.match(/\[[\s\S]*\]/)
-      const vols = JSON.parse(jm ? (jm[1] || jm[0]) : reply)
-      await saveVolumes(vols)
-      showToast('success', `卷纲完成！共 ${vols.length} 卷`)
+
+      const clean = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+      const jm = clean.match(/\{[\s\S]*\}/)
+      if (!jm) { showToast('error', '卷纲格式异常，请重试'); return }
+      let vol: any
+      try { vol = JSON.parse(jm[0]) } catch {
+        vol = JSON.parse(jm[0].replace(/,\s*}/g, '}').replace(/[\x00-\x1f]/g, ' '))
+      }
+      const newVol: Volume = {
+        volume_number: nextVolNum,
+        title: vol.title || `第${nextVolNum}卷`,
+        summary: vol.detailed_summary || vol.summary || '',
+        chapter_range: vol.chapter_range || [volumes.length > 0 ? volumes[volumes.length - 1].chapter_range[1] + 1 : 1, (volumes.length > 0 ? volumes[volumes.length - 1].chapter_range[1] : 0) + 12],
+        theme: vol.theme || '',
+        key_events: [],
+        detailed_summary: vol.detailed_summary || vol.summary,
+        character_arcs: vol.character_arcs,
+        key_events_str: vol.key_events_str,
+        emotional_curve: vol.emotional_curve,
+        foreshadowing: vol.foreshadowing,
+      }
+      const newVols = [...volumes, newVol]
+      await saveVolumes(newVols)
+      showToast('success', `第${nextVolNum}卷《${newVol.title}》已生成`)
     } catch (e: any) {
       if (cancelledRef.current) showToast('info', '已取消生成')
       else showToast('error', '卷纲生成失败：' + (e.message || '未知'))
@@ -345,20 +402,25 @@ export default function Workspace() {
       const isFirstChapterInBook = chapNum === 1
       const isFirstChapterInVol = chapNum === vol.chapter_range[0]
 
-      // 上一章细纲：只在非全书第一章时读取
+      // 上一章细纲 + 上一章正文结尾（非全书第一章时读取）
       const prevPlan = isFirstChapterInBook ? null : chapterPlans.find(p => p.chapter_number === chapNum - 1)
+      const prevChapter = isFirstChapterInBook ? null : chapters.find(c => c.chapter_number === chapNum - 1)
 
       const volContext = `【所在卷】第${vol.volume_number}卷《${vol.title}》
 概要：${vol.summary} | 主题：${vol.theme}
 章节范围：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章`
 
+      const prevContentExcerpt = prevChapter?.content
+        ? `\n【上一章正文结尾（${prevChapter.content.length}字）】\n${prevChapter.content.slice(-400)}\n（请根据以上结尾内容，确保本章细纲的起点和上一章实际结尾衔接流畅）`
+        : ''
+
       const prevContext = isFirstChapterInBook
         ? '（全书第一章，无前章）'
         : isFirstChapterInVol
-          ? '（本卷第一章，请基于大纲和卷纲直接设计开篇，不需要依赖前一章细纲）'
+          ? `（本卷第一章，请基于大纲和卷纲直接设计开篇，不需要依赖前一章细纲）${prevContentExcerpt}`
           : prevPlan
-            ? `【上一章细纲】第${prevPlan.chapter_number}章 ${prevPlan.title}\n概要：${prevPlan.summary}\n人物：${prevPlan.characters.join('、')}\n事件：${prevPlan.key_events.join('、')}`
-            : '（上一章细纲尚未生成，请基于大纲和卷纲独立设计本章）'
+            ? `【上一章细纲】第${prevPlan.chapter_number}章 ${prevPlan.title}\n概要：${prevPlan.summary}\n人物：${prevPlan.characters.join('、')}\n事件：${prevPlan.key_events.join('、')}${prevContentExcerpt}`
+            : `（上一章细纲尚未生成，请基于大纲和卷纲独立设计本章）${prevContentExcerpt}`
 
       const promptParts = [
         outlineContent.slice(0, 1500),
@@ -471,7 +533,6 @@ export default function Workspace() {
         if (data.error) {
           cancelledRef.current = true
           setGenerating(false); setStreamingText(''); setGenTarget('')
-          showToast('info', data.error === '已取消' ? '已取消生成' : '流式生成错误：' + data.error)
           return
         }
         if (!data.done && data.chunk) {
@@ -487,45 +548,51 @@ export default function Workspace() {
 
       cleanup()
 
-      if (cancelledRef.current) return
+      if (cancelledRef.current) {
+        showToast('info', '已取消生成')
+        return
+      }
 
       const finalText = reply || fullText
       setEditingContent(finalText)
       setStreamingText('')
+      setGenerating(false)
+      setGenTarget('')
       await saveChapter(chapNum, plan.title, finalText)
       await updateContext(chapNum, finalText)
+      showToast('success', `第${chapNum}章生成完成`)
 
-      // 自动生成章节摘要（记录官）
-      try {
-        const summaryReply = await window.electronAPI.aiChat([
-          { role: 'system', content: CHAPTER_SUMMARY_SYSTEM },
-          { role: 'user', content: CHAPTER_SUMMARY_USER(chapNum, plan.title, finalText, outlineContent) },
-        ], '章节摘要')
-        const jm = summaryReply.match(/\{[\s\S]*\}/)
-        if (jm) {
-          const s = JSON.parse(jm[0])
-          const prevSum = await window.electronAPI.db.get('SELECT id FROM chapter_summaries WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
-          const data = [
-            s.summary || '', JSON.stringify(s.characters_appeared || []), JSON.stringify(s.locations || []),
-            JSON.stringify(s.key_events || []), JSON.stringify(s.foreshadowing_planted || []),
-            JSON.stringify(s.foreshadowing_recovered || []), JSON.stringify(s.character_changes || {}),
-            JSON.stringify(s.world_changes || {}),
-          ]
-          if (prevSum) {
-            await window.electronAPI.db.run(
-              `UPDATE chapter_summaries SET summary=?,characters_appeared=?,locations=?,key_events=?,foreshadowing_planted=?,foreshadowing_recovered=?,character_changes=?,world_changes=? WHERE project_id=? AND chapter_number=?`,
-              [...data, Number(id), chapNum]
-            )
-          } else {
-            await window.electronAPI.db.run(
-              `INSERT INTO chapter_summaries (project_id,chapter_number,summary,characters_appeared,locations,key_events,foreshadowing_planted,foreshadowing_recovered,character_changes,world_changes) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-              [Number(id), chapNum, ...data]
-            )
+      // 自动生成章节摘要（记录官）— 后台静默，不阻塞 UI
+      ;(async () => {
+        try {
+          const summaryReply = await window.electronAPI!.aiChat([
+            { role: 'system', content: CHAPTER_SUMMARY_SYSTEM },
+            { role: 'user', content: CHAPTER_SUMMARY_USER(chapNum, plan.title, finalText, outlineContent) },
+          ], '章节摘要')
+          const jm = summaryReply.match(/\{[\s\S]*\}/)
+          if (jm) {
+            const s = JSON.parse(jm[0])
+            const prevSum = await window.electronAPI!.db.get('SELECT id FROM chapter_summaries WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
+            const data = [
+              s.summary || '', JSON.stringify(s.characters_appeared || []), JSON.stringify(s.locations || []),
+              JSON.stringify(s.key_events || []), JSON.stringify(s.foreshadowing_planted || []),
+              JSON.stringify(s.foreshadowing_recovered || []), JSON.stringify(s.character_changes || {}),
+              JSON.stringify(s.world_changes || {}),
+            ]
+            if (prevSum) {
+              await window.electronAPI!.db.run(
+                `UPDATE chapter_summaries SET summary=?,characters_appeared=?,locations=?,key_events=?,foreshadowing_planted=?,foreshadowing_recovered=?,character_changes=?,world_changes=? WHERE project_id=? AND chapter_number=?`,
+                [...data, Number(id), chapNum]
+              )
+            } else {
+              await window.electronAPI!.db.run(
+                `INSERT INTO chapter_summaries (project_id,chapter_number,summary,characters_appeared,locations,key_events,foreshadowing_planted,foreshadowing_recovered,character_changes,world_changes) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+                [Number(id), chapNum, ...data]
+              )
+            }
           }
-        }
-      } catch { /* 摘要失败不阻塞 */ }
-
-      showToast('success', `第${chapNum}章生成完成（含自动摘要）`)
+        } catch { /* 摘要失败不阻塞 */ }
+      })()
     } catch (e: any) {
       if (!cancelledRef.current) showToast('error', '生成失败：' + e.message)
     }
@@ -1012,15 +1079,15 @@ export default function Workspace() {
         )}
 
         {/* 编辑器 */}
-        <div className="flex-1 px-4 py-2">
+        <div className="flex-1 px-4 py-2 min-h-0 overflow-hidden">
           {(streamingText || generating) && genTarget === `第${selectedChapter}章` ? (
-            <div className="w-full h-full min-h-[300px] px-4 py-3 border border-primary/30 rounded-card bg-primary-light/5 overflow-auto">
-              <div className="flex items-center gap-2 mb-2">
+            <div className="w-full h-full px-4 py-3 border border-primary/30 rounded-card bg-primary-light/5 overflow-auto flex flex-col">
+              <div className="sticky top-0 z-10 flex items-center gap-2 mb-2 pb-2 border-b border-primary/10 bg-primary-light/5">
                 <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                 <span className="text-xs text-primary">AI 正在写作中...</span>
                 <button onClick={() => handleCancel()} className="ml-auto px-2 py-0.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹ 取消</button>
               </div>
-              <pre className="text-base text-text-main whitespace-pre-wrap leading-relaxed font-sans">
+              <pre className="text-base text-text-main whitespace-pre-wrap leading-relaxed font-sans flex-1 min-h-0 overflow-auto">
                 {streamingText || '...'}
               </pre>
             </div>
@@ -1096,7 +1163,7 @@ export default function Workspace() {
                   <button onClick={addVolume}
                     className="text-xs text-primary hover:underline">＋新建卷</button>
                   <button onClick={() => setShowGenPanel(showGenPanel === 'volumes' ? null : 'volumes')} disabled={generating || !outlineContent}
-                    className="text-xs text-primary hover:underline disabled:opacity-50">📐 生成卷纲</button>
+                    className="text-xs text-primary hover:underline disabled:opacity-50">📐 生成下一卷</button>
                 </div>
               </div>
 
@@ -1104,7 +1171,7 @@ export default function Workspace() {
                 <div className="text-center py-8">
                   <p className="text-xs text-text-placeholder mb-2">尚无卷纲</p>
                   <button onClick={() => setShowGenPanel(showGenPanel === 'volumes' ? null : 'volumes')} disabled={generating || !outlineContent}
-                    className="px-3 py-1 text-xs bg-primary text-white rounded-btn disabled:opacity-50">🤖 生成卷纲</button>
+                    className="px-3 py-1 text-xs bg-primary text-white rounded-btn disabled:opacity-50">🤖 生成下一卷</button>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -1135,8 +1202,46 @@ export default function Workspace() {
                           </div>
                         </button>
                         {isExpanded && (
-                          <div className="border-t border-border px-3 py-2 space-y-1.5">
-                            <p className="text-xs text-text-secondary">{vol.summary}</p>
+                          <div className="border-t border-border px-3 py-2 space-y-2">
+                            {vol.detailed_summary ? (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">📖 剧情详述</p>
+                                <p className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed">{vol.detailed_summary}</p>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-text-secondary">{vol.summary || vol.theme}</p>
+                            )}
+                            {vol.character_arcs && (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">👤 角色弧线</p>
+                                <p className="text-xs text-text-secondary whitespace-pre-wrap">{vol.character_arcs}</p>
+                              </div>
+                            )}
+                            {vol.emotional_curve && (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">🎭 情感曲线</p>
+                                <p className="text-xs text-text-secondary">{vol.emotional_curve}</p>
+                              </div>
+                            )}
+                            {((vol.key_events?.length || vol.key_events_str) && (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">⚡ 关键事件</p>
+                                <p className="text-xs text-text-secondary">
+                                  {(vol.key_events_str || vol.key_events?.map((e: any) => typeof e === 'string' ? e : `${e.event}(${e.chapters})`).join('、'))}
+                                </p>
+                              </div>
+                            ))}
+                            {vol.foreshadowing && (
+                              <div className="text-xs text-text-secondary">
+                                <p>🪝 伏笔：{vol.foreshadowing}</p>
+                              </div>
+                            )}
+                            {(vol.foreshadowing_planted?.length || vol.foreshadowing_recovered?.length) ? (
+                              <div className="text-xs text-text-secondary">
+                                {vol.foreshadowing_planted?.length ? <p>🪝 新埋伏笔：{vol.foreshadowing_planted.join('、')}</p> : null}
+                                {vol.foreshadowing_recovered?.length ? <p>✅ 回收伏笔：{vol.foreshadowing_recovered.join('、')}</p> : null}
+                              </div>
+                            ) : null}
                             <div className="flex gap-1.5 flex-wrap">
                               <button
                                 onClick={async () => {
@@ -1152,7 +1257,7 @@ export default function Workspace() {
                               <button
                                 onClick={() => setFullView({
                                   title: vol.title,
-                                  content: `# ${vol.title}\n\n**主题**：${vol.theme}\n**章节范围**：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章\n**概要**：${vol.summary}\n**关键事件**：${vol.key_events.join('、')}\n\n## 本卷章节细纲\n\n${volPlans.map(p => `### 第${p.chapter_number}章 ${p.title}\n${p.summary}\n人物：${p.characters.join('、')}\n事件：${p.key_events.join('、')}\n字数：${p.estimated_words}\n`).join('\n')}`
+                                  content: `# ${vol.title}\n\n**主题**：${vol.theme}\n**章节范围**：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章\n\n**剧情详述**：${vol.detailed_summary || vol.summary}\n\n**角色弧线**：${vol.character_arcs || '—'}\n\n**情感曲线**：${vol.emotional_curve || '—'}\n\n**关键事件**：${vol.key_events.map(e => typeof e === 'string' ? e : `${e.event} (${e.chapters})`).join('、')}\n\n${vol.foreshadowing_planted?.length ? '**🪝 新伏笔**：' + vol.foreshadowing_planted.join('、') + '\n\n' : ''}${vol.foreshadowing_recovered?.length ? '**✅ 回收伏笔**：' + vol.foreshadowing_recovered.join('、') + '\n\n' : ''}## 本卷章节细纲\n\n${volPlans.map(p => `### 第${p.chapter_number}章 ${p.title}\n${p.summary}\n人物：${p.characters.join('、')}\n事件：${p.key_events.join('、')}\n字数：${p.estimated_words}\n`).join('\n')}`
                                 })}
                                 className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary"
                               >📖 查看完整</button>

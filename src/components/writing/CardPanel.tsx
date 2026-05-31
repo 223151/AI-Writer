@@ -40,6 +40,9 @@ export default function CardPanel({ projectId, refreshTrigger, onRefresh, genLoa
   const [expandedChar, setExpandedChar] = useState<number | null>(null)
   const [expandedWorld, setExpandedWorld] = useState<number | null>(null)
 
+  // 离开时取消生成
+  useEffect(() => { return () => { if (genLoading) window.electronAPI?.cancelAi() } })
+
   const loadCards = useCallback(async () => {
     if (!window.electronAPI) { setLoaded(true); return }
     try {
@@ -550,6 +553,20 @@ ${disContext || '无'}
     showToast('success', `「${ws.name}」已删除`)
   }
 
+  // ===== 批量删除 =====
+  const deleteAllChars = async () => {
+    if (!window.confirm(`确定删除全部 ${characters.length} 个角色？此操作不可恢复。`)) return
+    await window.electronAPI!.db.run('DELETE FROM character_cards WHERE project_id = ?', [projectId])
+    loadCards(); onRefresh?.()
+    showToast('success', `已删除全部角色`)
+  }
+  const deleteAllWorlds = async () => {
+    if (!window.confirm(`确定删除全部 ${worlds.length} 个设定？此操作不可恢复。`)) return
+    await window.electronAPI!.db.run('DELETE FROM world_settings WHERE project_id = ?', [projectId])
+    loadCards(); onRefresh?.()
+    showToast('success', `已删除全部设定`)
+  }
+
   if (!loaded) return <div className="p-4 text-xs text-text-placeholder">加载中...</div>
 
   return (
@@ -596,6 +613,11 @@ ${disContext || '无'}
                 📖 从章节提取
               </button>
             </div>
+            {characters.length > 0 && (
+              <button onClick={deleteAllChars} className="w-full px-3 py-1 text-xs text-danger border border-danger/30 rounded-btn hover:bg-danger/10 transition-colors">
+                🗑 清空全部角色 ({characters.length})
+              </button>
+            )}
             {characters.length === 0 ? (
               <p className="text-xs text-text-placeholder text-center py-6">暂无角色卡片</p>
             ) : (
@@ -677,6 +699,11 @@ ${disContext || '无'}
                 📖 从章节提取
               </button>
             </div>
+            {worlds.length > 0 && (
+              <button onClick={deleteAllWorlds} className="w-full px-3 py-1 text-xs text-danger border border-danger/30 rounded-btn hover:bg-danger/10 transition-colors">
+                🗑 清空全部设定 ({worlds.length})
+              </button>
+            )}
             {worlds.length === 0 ? (
               <p className="text-xs text-text-placeholder text-center py-6">暂无世界设定</p>
             ) : (

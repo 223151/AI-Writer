@@ -289,7 +289,7 @@ function LibraryCard({ library, onDelete }: { library: StyleLibrary; onDelete: (
   return (
     <div
       onClick={() => navigate(`/library/${library.id}`)}
-      className="bg-white rounded-card border border-border p-5 hover:shadow-md hover:border-primary/30 transition-all group cursor-pointer"
+      className="bg-white rounded-card border border-border p-5 hover:shadow-md hover:border-primary/30 transition-all group cursor-pointer relative"
     >
       <div className="flex items-start justify-between mb-3">
         <h3 className="text-section-title text-text-main">
@@ -305,9 +305,7 @@ function LibraryCard({ library, onDelete }: { library: StyleLibrary; onDelete: (
         <button
           onClick={(e) => { e.stopPropagation(); onDelete() }}
           className="opacity-0 group-hover:opacity-100 text-text-placeholder hover:text-danger transition-all"
-        >
-          🗑
-        </button>
+        >🗑</button>
       </div>
 
       <div className="space-y-1.5 mb-3">

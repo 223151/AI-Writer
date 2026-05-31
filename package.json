@@ -1,6 +1,6 @@
 {
   "name": "novel-ai-writer",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "AI 小说写作软件 — 学习小说风格，辅助长篇小说创作",
   "main": "dist-electron/main.cjs",
   "scripts": {

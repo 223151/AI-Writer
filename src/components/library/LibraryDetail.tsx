@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useLibraryStore } from '../../store/libraryStore'
 import { showToast } from '../common/Toast'
+import { STYLE_EXTRACTION_SYSTEM, STYLE_EXTRACTION_USER } from '../../services/extractor'
 import type { StyleLibrary } from '../../types'
 
 export default function LibraryDetail() {
@@ -9,6 +10,18 @@ export default function LibraryDetail() {
   const navigate = useNavigate()
   const { libraries, loaded, load } = useLibraryStore()
   const [library, setLibrary] = useState<StyleLibrary | null>(null)
+  const [reextracting, setReextracting] = useState(false)
+  const reextractCancelled = useRef(false)
+
+  // 离开时取消提取（不弹toast，由catch处理）
+  useEffect(() => {
+    return () => {
+      if (reextracting) {
+        reextractCancelled.current = true
+        window.electronAPI?.cancelAi()
+      }
+    }
+  })
 
   useEffect(() => { if (!loaded) load() }, [])
   useEffect(() => {
@@ -36,6 +49,31 @@ export default function LibraryDetail() {
     } catch (e: any) {
       showToast('error', '保存失败：' + (e.message || '未知'))
     }
+  }
+
+  const handleReextract = async () => {
+    if (!window.electronAPI || !library) return
+    setReextracting(true)
+    try {
+      const file = await window.electronAPI.openFile({ filters: [{ name: '文档', extensions: ['txt', 'docx', 'pdf'] }] })
+      if (!file) { setReextracting(false); return }
+      const text = await window.electronAPI.parseFile(file.filePath)
+      if (!text || text.length < 500) { showToast('error', '文件内容不足500字'); setReextracting(false); return }
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: STYLE_EXTRACTION_SYSTEM },
+        { role: 'user', content: STYLE_EXTRACTION_USER(text) },
+      ], '重新提取风格')
+      const jm = reply.match(/```json\s*([\s\S]*?)\s*```/) || reply.match(/\{[\s\S]*\}/)
+      const profile = jm ? JSON.parse(jm[1] || jm[0]) : { raw_analysis: reply }
+      const jsonStr = JSON.stringify(profile)
+      await window.electronAPI.db.run('UPDATE style_libraries SET style_profile=? WHERE id=?', [jsonStr, library.id])
+      setLibrary({ ...library, style_profile: profile })
+      showToast('success', '风格已重新提取')
+    } catch (e: any) {
+      if (reextractCancelled.current) showToast('info', '已取消提取')
+      else showToast('error', '重新提取失败：' + (e.message || '未知'))
+    }
+    finally { setReextracting(false) }
   }
 
   if (!library) {
@@ -88,7 +126,19 @@ export default function LibraryDetail() {
       <button onClick={() => navigate('/library')} className="px-3 py-1.5 text-xs border border-border-input rounded-btn text-text-secondary hover:bg-bg-secondary hover:text-text-main mb-4 inline-flex items-center gap-1">← 返回风格库</button>
 
       <div className="bg-white rounded-card border border-border p-6">
-        <h1 className="text-page-title mb-4">{library.name}</h1>
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-page-title">{library.name}</h1>
+          {reextracting ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-warning flex items-center gap-1"><div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 提取中...</span>
+              <button onClick={() => { reextractCancelled.current = true; window.electronAPI?.cancelAi() }} className="px-2 py-1 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹ 取消</button>
+            </div>
+          ) : (
+            <button onClick={handleReextract} className="px-3 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light/20">
+              🔄 重新提取
+            </button>
+          )}
+        </div>
         <p className="text-xs text-text-placeholder mb-4">💡 点击任意字段直接编辑，失焦自动保存</p>
 
         {/* 写作风格 */}
