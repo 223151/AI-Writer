@@ -337,10 +337,10 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
         <button onClick={handleGenFromOutline} disabled={!!genLoading || !outlineContent}
           className="px-2 py-0.5 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
         >{genLoading === cat ? '⏳' : '🤖'} 从大纲生成</button>
-        <button onClick={handleExtractFromChapter} disabled={extracting || !chapters?.length}
+        <button onClick={handleExtractFromChapter} disabled={!!extracting}
           className="px-2 py-0.5 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
         >{extracting ? '⏳' : '📖'} 从章节提取</button>
-        <button onClick={handleAIFill} disabled={!!genLoading || !outlineContent}
+        <button onClick={handleAIFill} disabled={!!genLoading}
           className="px-2 py-0.5 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
         >{genLoading === cat ? '⏳' : '🪄'} AI补全</button>
         {(genLoading || extracting) && (
