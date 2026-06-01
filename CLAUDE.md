@@ -8,7 +8,7 @@ Windows 桌面端 AI 小说写作软件。Electron + React + TypeScript + Tailwi
 
 ---
 
-## 当前状态：v1.3.0
+## 当前状态：v1.4.0
 
 ### 已完成的核心模块
 

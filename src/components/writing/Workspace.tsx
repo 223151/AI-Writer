@@ -33,7 +33,7 @@ interface Volume {
   foreshadowing?: string
   foreshadowing_planted?: string[]
   foreshadowing_recovered?: string[]
-  // v1.3.0 卷纲优化新增字段
+  // v1.4.0 卷纲优化新增字段
   word_count_target?: number
   connection_prev?: string
   connection_next?: string
@@ -487,7 +487,7 @@ export default function Workspace() {
         key_events_str: vol.key_events_str,
         emotional_curve: vol.emotional_curve,
         foreshadowing: vol.foreshadowing,
-        // v1.3.0 卷纲优化新增字段
+        // v1.4.0 卷纲优化新增字段
         word_count_target: vol.word_count_target,
         connection_prev: vol.connection_prev,
         connection_next: vol.connection_next,
@@ -1509,7 +1509,7 @@ export default function Workspace() {
                                 {vol.foreshadowing_recovered?.length ? <p>✅ 回收伏笔：{vol.foreshadowing_recovered.join('、')}</p> : null}
                               </div>
                             ) : null}
-                            {/* v1.3.0 卷纲优化新增显示 */}
+                            {/* v1.4.0 卷纲优化新增显示 */}
                             {vol.word_count_target ? (
                               <div>
                                 <p className="text-xs font-medium text-text-secondary mb-0.5">📊 字数目标</p>
