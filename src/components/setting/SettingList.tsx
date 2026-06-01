@@ -6,13 +6,6 @@ import InlineEdit from '../common/InlineEdit'
 import { useSettingStore } from '../../store/settingStore'
 import type { SettingLibrary } from '../../types'
 
-const CATEGORIES = [
-  { key: 'character', label: '角色' },
-  { key: 'world', label: '世界观' },
-  { key: 'rule', label: '规则' },
-  { key: 'relationship', label: '关系' },
-]
-
 export default function SettingList() {
   const [modalOpen, setModalOpen] = useState(false)
   const [modalType, setModalType] = useState<'import' | 'create'>('import')
@@ -22,16 +15,11 @@ export default function SettingList() {
   const [filePath, setFilePath] = useState('')
   const [fileName, setFileName] = useState('')
   const [creating, setCreating] = useState(false)
-  const [selectedCats, setSelectedCats] = useState<string[]>(['character', 'world', 'rule', 'relationship'])
 
   const navigate = useNavigate()
   const { libraries, loaded, load, create, remove } = useSettingStore()
 
   useEffect(() => { load() }, [])
-
-  const toggleCat = (key: string) => {
-    setSelectedCats(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
-  }
 
   const handleSelectFile = async () => {
     try {
@@ -45,13 +33,11 @@ export default function SettingList() {
   const openModal = (type: 'import' | 'create') => {
     setModalType(type)
     setName(''); setPastedText(''); setFilePath(''); setFileName(''); setMode('file')
-    setSelectedCats(['character', 'world', 'rule', 'relationship'])
     setModalOpen(true)
   }
 
   const handleSubmit = async () => {
     if (!name.trim()) { showToast('error', '请输入名称'); return }
-    if (selectedCats.length === 0) { showToast('error', '请至少选择一个类别'); return }
     if (modalType === 'import') {
       if (mode === 'paste' && !pastedText.trim()) { showToast('error', '请粘贴小说文本'); return }
       if (mode === 'file' && !filePath) { showToast('error', '请选择小说文件'); return }
@@ -70,12 +56,13 @@ export default function SettingList() {
       if (newId) {
         showToast('success', `设定库「${name}」创建成功！`)
         setModalOpen(false)
-        navigate(`/setting-lib/${newId}?cats=${selectedCats.join(',')}`)
+        navigate(`/setting-lib/${newId}`)
         return
       }
-      showToast('error', '创建失败，请重试')
+      showToast('error', `创建失败，ID=${newId}`)
     } catch (e: any) {
-      showToast('error', '创建失败：' + (e.message || '未知错误'))
+      showToast('error', '创建异常：' + (e?.message || e?.toString?.() || '未知错误'))
+      console.error(e)
     } finally { setCreating(false) }
   }
 
@@ -144,19 +131,6 @@ export default function SettingList() {
               <input type="text" value={name} onChange={e => setName(e.target.value)}
                 placeholder="例如：盘龙设定" autoFocus
                 className="w-full h-10 px-3 border border-border-input rounded-btn text-body focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 placeholder:text-text-placeholder" />
-            </div>
-
-            <div>
-              <label className="block text-body text-text-main mb-2">类别选择（至少选一项）</label>
-              <div className="flex gap-2 flex-wrap">
-                {CATEGORIES.map(c => (
-                  <button key={c.key} onClick={() => toggleCat(c.key)}
-                    className={`px-3 py-1.5 text-sm rounded-btn border transition-colors ${
-                      selectedCats.includes(c.key) ? 'bg-primary text-white border-primary' : 'border-border-input text-text-secondary hover:bg-bg-secondary'
-                    }`}
-                  >{c.label}</button>
-                ))}
-              </div>
             </div>
 
             {modalType === 'import' && (

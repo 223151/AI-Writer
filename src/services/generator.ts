@@ -72,48 +72,68 @@ ${description ? `作者的初步想法：${description}` : ''}
 
 // ==================== Phase 3: 大纲生成 ====================
 
-export const OUTLINE_SYSTEM = `你是资深网文故事架构师。你的任务是将创作方案转化为完整的故事大纲。
+export const OUTLINE_SYSTEM = `你是资深网文故事架构师。你的任务是为长篇网络小说（60章以上）设计完整的故事大纲。
 
 ## 核心信念
 **套路 = 确定性的情绪满足**。大纲必须服务于情绪目标。
 
-## 大纲必须包含
+## 大纲必须包含以下七个部分（用 Markdown 二级标题 ## 分隔）
 
-### 1. 情绪弧线设计
+### 一、分卷结构规划
+将全书的60+章合理划分为若干卷（建议4-8卷）。每卷说明：
+- **卷标题**：10字以内
+- **章节范围**：该卷覆盖哪些章（AI根据内容密度自行决定，不必均匀分配）
+- **本卷功能**：本卷在全书中的结构作用（开篇建立/冲突升级/转折深化/高潮收束等）
+- **核心内容**：本卷要完成的主要剧情（100字以内）
+
+### 二、全书字数规划
+- 全书目标总字数（建议60章×4000字=24万字起）
+- 每卷字数分布建议（高潮卷可以更长，过渡卷可以更短）
+- 每章平均字数范围
+
+### 三、情绪弧线设计
 - 全书情绪曲线：从第1章到结局，情绪如何起伏？
 - 标注关键的情绪高点（爽点/泪点/燃点）在第几章附近
 - 情绪节奏：爽点密度如何分布？（前密后疏/均匀分布/阶段性爆发）
+- 标注情绪低谷位置及其功能（为后续高潮积蓄力量）
 
-### 2. 钩子设计
-每5-10章必须有一个钩子，类型交替使用：
-- **悬念钩子**：抛出一个谜题（"他到底是谁？"）
-- **冲突钩子**：展示不可调和的矛盾
-- **身份钩子**：揭示/隐藏特殊身份
-- **成长钩子**：获得新能力/突破的预告
-- **关系钩子**：人物关系的重大变化
+### 四、钩子设计与伏笔地图
+**钩子设计**（每5-10章一个，类型交替使用）：
+- 悬念钩子 / 冲突钩子 / 身份钩子 / 成长钩子 / 关系钩子
 
-### 3. 故事结构（四幕剧）
-- **第一幕（开篇 1-10章）**：建立日常→打破日常→展示核心冲突
-- **第二幕（发展 11-30章）**：冲突升级→获得资源/能力→遭遇挫折
-- **第三幕（转折 31-45章）**：重大转折→身份/关系/目标重新定义
-- **第四幕（高潮+结局 46-60章）**：最终对决→情感释放→余味收尾
+**伏笔地图**（跨卷的关键伏笔）：
+列出全书5-10个最重要的伏笔，每个伏笔标注：
+- 伏笔内容（一句话描述）
+- 埋设位置（第几卷/第几章附近）
+- 回收位置（第几卷/第几章附近）
+- 重要程度（核心/重要/点缀）
+- 跨几卷（1=卷内回收，2+=跨卷伏笔）
 
-### 4. 主要人物弧线
-每个核心角色的起点→终点变化
+### 五、人物弧线总览
+每个核心角色独立说明：
+- 角色名 + 功能位（主角/对手/导师/催化剂/镜像对手等）
+- **起点状态**：故事开始时的身份/性格/处境
+- **终点状态**：故事结束时的身份/性格/处境
+- **弧线轨迹**：分卷描述角色变化的关键转折点
+- **核心欲望**与**内在缺陷**的对抗过程
 
-### 5. 核心冲突层次
-- 外部冲突（人与环境/人与人的对抗）
-- 内部冲突（欲望vs恐惧、责任vs自由）
+### 六、主题线与核心冲突
+- **主题线**：本书要探讨的核心主题（如"力量与责任""自由与羁绊"），并说明该主题在各卷中的演化
+- **外部冲突**：人与环境/人与人的对抗层次（从个人对抗→群体对抗→终极对抗的递进）
+- **内部冲突**：主角欲望vs恐惧、责任vs自由的具体表现及解决过程
 
-### 6. 分章规划框架
-简版：列出 10-20 个关键节点的章节位置和功能
+### 七、分章规划框架
+- 列出15-25个关键剧情节点的章节位置和功能
+- 标注每个节点对应的卷归属
+- 标注大高潮位置（每卷至少1个）
 
 ## 写作要求
 - 用中文写作，语言具体有画面感
 - **参考对标书的结构和节奏**（如果用户提供了）
 - **严格遵循指定的写作风格**（如果用户提供了）
 - 给出具体的情节内容，不要泛泛而谈
-- 爽点要明确标注类型和位置
+- 每个部分必须标注具体的章节/卷位置
+- 伏笔地图必须跨卷标注，不要所有伏笔堆在同一卷
 `
 
 export const OUTLINE_USER = (
@@ -168,39 +188,106 @@ ${settingLibContext}
 
 // ==================== Phase 3.5: 卷纲生成 ====================
 
-export const VOLUME_OUTLINE_SYSTEM = `你是小说结构规划师。根据大纲，只规划当前这一卷（不是全部分卷）。
+export const VOLUME_OUTLINE_SYSTEM = `你是小说结构规划师。你的任务是根据大纲中「分卷结构规划」部分，为**当前这一卷**设计详细的卷纲。
 
-## 只规划当前这一卷，包含以下内容（所有文本字段不要换行）
-- volume_number: 卷号
+## 卷纲必须包含以下内容（所有文本字段内不要换行，用中文标点自然断句）
+
+### 1. 基础信息
+- volume_number: 卷号（数字）
 - title: 卷标题（10字以内）
-- chapter_range: 章节范围 [起始章, 结束章]（8-15章）
-- theme: 剧情主题
-- detailed_summary: 300-500字剧情详述（起承转合）
-- character_arcs: 本卷角色成长变化
-- key_events_str: 关键事件合为一个字符串
-- emotional_curve: 情绪走向
-- foreshadowing: 伏笔设计
+- chapter_range: [起始章号, 结束章号] — AI根据本卷内容密度自行决定章节数，不设固定范围
+- word_count_target: 本卷目标字数（数字，根据大纲的「全书字数规划」推算）
+
+### 2. 承上启下
+- connection_prev: 如何承接前一卷的结尾（第一卷填"全书开篇"）（50字以内）
+- connection_next: 本卷结尾如何为下一卷做铺垫（最后一卷填"全书收束"）（50字以内）
+
+### 3. 剧情详述
+- detailed_summary: 300-500字的本卷剧情详述（起承转合）
+
+### 4. 节奏设计
+- pacing_design: 本卷内章节节奏规划，标注快节奏章段和慢节奏章段，格式如"第X-Y章快速推进→第Z章缓冲→第W-Z章积累到小高潮"（100-200字）
+- emotional_cadence: 本卷的情绪节奏，分阶段描述（"开卷：好奇+紧张 → 发展：爽感逐步释放 → 高潮：燃点+泪点 → 收尾：余味+悬念"）
+
+### 5. 伏笔操作
+- foreshadowing_plant: 本卷需要新埋的伏笔（2-4条，每条一句话描述），优先参考大纲「伏笔地图」中标记为本卷埋设的伏笔
+- foreshadowing_payoff: 本卷需要回收的伏笔（从前卷已埋设的伏笔中挑选），优先回收大纲「伏笔地图」中标记为本卷回收的伏笔。如果当前已埋伏笔的目标章节在本卷范围内，必须回收
+- foreshadowing_advance: 本卷需要推进但暂不回收的跨卷伏笔（推进到什么程度，埋下什么新线索）
+
+### 6. 人物弧线里程碑
+- character_milestones: 数组，本卷内各核心角色的发展里程碑。每个角色：character(角色名)、start_state(本卷起点状态)、end_state(本卷终点状态)、key_event(触发转变的关键事件)
+
+### 7. 关键冲突节点
+- conflict_nodes: 数组，本卷内的关键冲突升级点（3-5个）。每个节点：description(冲突描述)、chapter_segment(所在章节段，如"第X-Y章")、escalation_type(冲突升级方式：外部升级/内部抉择/关系破裂/新威胁出现/身份暴露/资源争夺)
+- theme: 本卷剧情主题（10字以内）
+- key_events_str: 本卷关键事件合为一个字符串，用"→"连接表示先后顺序（如"主角入学→初露锋芒→遭遇暗算→获得传承→击败对手"）
 
 ## 输出格式
 只输出一个 JSON 对象（不是数组），不要 markdown 代码块。
-{"volume_number":1,"title":"...","chapter_range":[1,12],"theme":"...","detailed_summary":"...","character_arcs":"...","key_events_str":"...","emotional_curve":"...","foreshadowing":"..."}`
+
+{
+  "volume_number": 1,
+  "title": "卷标题",
+  "chapter_range": [1, 12],
+  "word_count_target": 48000,
+  "connection_prev": "全书开篇",
+  "connection_next": "主角遭遇重大挫折，为第二卷的成长线埋下伏笔",
+  "detailed_summary": "300-500字剧情详述...",
+  "pacing_design": "第1-3章快节奏建立→第4-5章日常缓冲→第6-9章积累冲突→第10-11章小高潮→第12章余味+钩子",
+  "emotional_cadence": "开卷：好奇+紧张 → 发展：爽感逐步释放 → 高潮：燃点+泪点 → 收尾：余味+悬念",
+  "foreshadowing_plant": ["伏笔1描述", "伏笔2描述"],
+  "foreshadowing_payoff": ["回收伏笔X：描述并回收方式"],
+  "foreshadowing_advance": "跨卷伏笔A推进到XX程度，埋下新线索B",
+  "character_milestones": [
+    {"character": "主角名", "start_state": "本卷起点状态", "end_state": "本卷终点状态", "key_event": "触发转变的关键事件"}
+  ],
+  "conflict_nodes": [
+    {"description": "冲突描述", "chapter_segment": "第X-Y章", "escalation_type": "外部升级"}
+  ],
+  "theme": "剧情主题",
+  "key_events_str": "事件A→事件B→事件C→事件D"
+}`
 
 export const VOLUME_OUTLINE_USER = (
   outlineContent: string, totalChapters: number,
-  volNum: number, prevVolContext: string, prevChapterPlans: string
+  volNum: number, prevVolContext: string, prevChapterPlans: string,
+  canonFactsContext: string, foreshadowingStatus: string, prevVolOutcomes: string
 ) => {
   let prev = ''
   if (prevVolContext) {
     prev = `\n【前一卷已完成的内容】\n${prevVolContext}`
     if (prevChapterPlans) prev += `\n\n【前一卷各章细纲（已生成）】\n${prevChapterPlans}`
+    if (prevVolOutcomes) prev += `\n\n【前一卷各章实际执行结果（来自记录官摘要）】\n${prevVolOutcomes}`
     prev += `\n\n请基于前一卷的结尾，自然衔接生成第 ${volNum} 卷。章号从前一卷结束的下一章开始。`
   }
-  return `全书大纲：
-${outlineContent.slice(0, 2000)}
 
-全书共 ${totalChapters} 章，现在只生成第 ${volNum} 卷。${prev}
+  let prompt = `【全书大纲】
+${outlineContent}
 
-请输出第 ${volNum} 卷的 JSON 对象（不要数组）。`
+全书共 ${totalChapters} 章，现在只生成第 ${volNum} 卷。
+`
+
+  if (prev) prompt += prev
+
+  if (canonFactsContext) {
+    prompt += `\n\n【📖 事实簿（硬规则，不可违反）】
+${canonFactsContext}`
+  }
+
+  if (foreshadowingStatus) {
+    prompt += `\n\n【🪝 伏笔注册表当前状态】
+${foreshadowingStatus}
+
+请根据以上伏笔状态，规划本卷的伏笔操作：
+- 状态为「已埋/已加固」且目标章节在本卷范围内的伏笔 → 务必填入 foreshadowing_payoff 进行回收
+- 状态为「已埋」但目标章节不在本卷的跨卷伏笔 → 填入 foreshadowing_advance 说明推进到什么程度
+- 大纲「伏笔地图」中标记为本卷新埋的伏笔 → 填入 foreshadowing_plant
+`
+  }
+
+  prompt += `\n请输出第 ${volNum} 卷的 JSON 对象（不要数组）。`
+
+  return prompt
 }
 
 // ==================== Phase 4: 细纲生成 ====================

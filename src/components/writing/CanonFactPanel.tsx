@@ -23,6 +23,10 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   const [cat, setCat] = useState<FactCategory>('character')
   const [extracting, setExtracting] = useState(false)
   const [genLoading, setGenLoading] = useState('')
+  const [showChapterInput, setShowChapterInput] = useState(false)
+  const [chapterInputVal, setChapterInputVal] = useState('')
+  const [showAiFillInput, setShowAiFillInput] = useState(false)
+  const [aiFillInputVal, setAiFillInputVal] = useState('')
   const cancelledRef = useRef(false)
   const loadingRef = useRef(false)
 
@@ -115,15 +119,20 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   }
 
   // ========== 从章节提取 ==========
-  const handleExtractFromChapter = async () => {
+  const startChapterExtract = () => {
     if (!chapters || chapters.length === 0) { showToast('error', '暂无章节'); return }
-    const chNums = chapters.map(c => c.chapter_number).join(',')
-    const num = parseInt(window.prompt(`从第几章提取？（可选：${chNums}）`, String(chapters[chapters.length - 1]?.chapter_number || 1)) || '0')
-    if (!num) return
-    const ch = chapters.find(c => c.chapter_number === num)
+    setChapterInputVal(String(chapters[chapters.length - 1]?.chapter_number || 1))
+    setShowChapterInput(true)
+  }
+  const doChapterExtract = async () => {
+    const num = parseInt(chapterInputVal)
+    if (!num) { showToast('error', '请输入有效章号'); return }
+    setShowChapterInput(false)
+    const ch = chapters?.find(c => c.chapter_number === num)
     if (!ch || !ch.content) { showToast('error', '该章无内容'); return }
 
     setExtracting(true)
+    cancelledRef.current = false
     try {
       const prompt = cat === 'character'
         ? `从以下章节提取所有角色及其特征，输出JSON数组：[{"fact_key":"角色名","fact_value":"角色描述","details":{"personality":"性格","abilities":"能力"}}]`
@@ -167,10 +176,15 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   }
 
   // ========== AI 补全 ==========
-  const handleAIFill = async () => {
-    const name = window.prompt(`输入${CATS.find(c => c.key === cat)?.label}名称，AI将自动补全信息：`)
-    if (!name || !name.trim()) return
+  const startAiFill = () => {
     if (!outlineContent) { showToast('error', '请先生成大纲'); return }
+    setAiFillInputVal('')
+    setShowAiFillInput(true)
+  }
+  const doAiFill = async () => {
+    const name = aiFillInputVal.trim()
+    if (!name) { showToast('error', '请输入名称'); return }
+    setShowAiFillInput(false)
 
     cancelledRef.current = false
     setGenLoading(cat)
@@ -270,101 +284,74 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* 头部 */}
-      <div className="flex items-center gap-1 px-3 py-2 bg-bg-secondary border-b border-border shrink-0 flex-wrap">
-        <span className="text-sm font-medium text-text-main mr-1">📖 设定</span>
-        <span className="text-xs text-text-secondary">{facts.length}项 · {hardCount}硬规则</span>
-        <div className="flex-1" />
-        <button onClick={handleExtractAll} disabled={extracting || !outlineContent}
-          className="px-2 py-0.5 text-xs bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
-        >{extracting ? '⏳' : '🔄'} 批量提取</button>
-        <button onClick={async () => {
-          try {
-            const libs = await window.electronAPI!.db.query("SELECT id, name, setting_data FROM setting_libraries ORDER BY created_at DESC")
-            if (libs.length === 0) { showToast('error', '左侧设定库暂无数据，请先创建'); return }
-            const names = libs.map((l: any, i: number) => `${i+1}. ${l.name}`).join('\n')
-            const idx = parseInt(window.prompt(`选择要导入的设定库：\n${names}`, '1') || '0') - 1
-            if (idx < 0 || idx >= libs.length) return
-            const lib = libs[idx]
-            const d = typeof lib.setting_data === 'string' ? JSON.parse(lib.setting_data || '{}') : (lib.setting_data || {})
-            let imported = 0
-            for (const ch of (d.characters || [])) {
-              await window.electronAPI!.db.run(
-                `INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter) VALUES (?, 'character', ?, ?, 1, '设定库导入', ?, 0)`,
-                [projectId, ch.name, ch.info || '', JSON.stringify({ personality: ch.info, abilities: ch.abilities, role_type: ch.role })]
-              ); imported++
-            }
-            for (const w of (d.worlds || [])) {
-              await window.electronAPI!.db.run(
-                `INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter) VALUES (?, 'setting', ?, ?, 1, '设定库导入', ?, 0)`,
-                [projectId, w.name, w.description || '', JSON.stringify({ description: w.description, trigger_keywords: w.category })]
-              ); imported++
-            }
-            for (const r of (d.rules || [])) {
-              await window.electronAPI!.db.run(
-                `INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter) VALUES (?, 'rule', ?, ?, 1, '设定库导入', ?, 0)`,
-                [projectId, r.name, r.description, '{}']
-              ); imported++
-            }
-            showToast('success', `已从《${lib.name}》导入 ${imported} 条设定`)
-            loadFacts()
-          } catch (e: any) { showToast('error', '导入失败：' + (e.message || '未知')) }
-        }}
-          className="px-2 py-0.5 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary"
-        >📥 从设定库导入</button>
-      </div>
-
-      {/* 类别标签 */}
-      <div className="flex border-b border-border shrink-0 overflow-x-auto">
+      {/* 类别标签 + 统计 */}
+      <div className="flex items-center border-b border-border shrink-0">
         {CATS.map(c => {
           const count = facts.filter(f => f.fact_category === c.key).length
           return (
             <button key={c.key} onClick={() => setCat(c.key)}
-              className={`flex items-center gap-1 px-3 py-1.5 text-xs whitespace-nowrap transition-colors
+              className={`px-2.5 py-1.5 text-xs whitespace-nowrap transition-colors
                 ${cat === c.key ? 'text-primary border-b-2 border-primary font-medium' : 'text-text-secondary hover:text-text-main'}`}
-            >
-              {c.icon} {c.label}
-              {count > 0 && <span className="text-text-placeholder">({count})</span>}
-            </button>
+            >{c.label}({count})</button>
           )
         })}
+        <div className="flex-1" />
+        <button onClick={handleExtractAll} disabled={extracting || !outlineContent}
+          className="px-2 py-1.5 text-xs text-text-secondary hover:text-primary disabled:opacity-50"
+          title="批量提取所有设定">批量提取</button>
       </div>
 
       {/* 操作栏 */}
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border shrink-0 flex-wrap">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border flex-wrap">
         <button onClick={() => { setShowAdd(!showAdd); setNewKey(''); setNewValue(''); setNewDetails(''); setNewHard(true) }}
-          className="px-2 py-0.5 text-xs border border-primary text-primary rounded hover:bg-primary/5"
-        >+ 手动添加</button>
+          className="px-2 py-1 text-xs border border-primary text-primary rounded hover:bg-primary/5">+ 手动添加</button>
         <button onClick={handleGenFromOutline} disabled={!!genLoading || !outlineContent}
-          className="px-2 py-0.5 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
-        >{genLoading === cat ? '⏳' : '🤖'} 从大纲生成</button>
-        <button onClick={handleExtractFromChapter} disabled={!!extracting}
-          className="px-2 py-0.5 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
-        >{extracting ? '⏳' : '📖'} 从章节提取</button>
-        <button onClick={handleAIFill} disabled={!!genLoading}
-          className="px-2 py-0.5 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
-        >{genLoading === cat ? '⏳' : '🪄'} AI补全</button>
+          className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
+        >{genLoading === cat ? '生成中...' : '从大纲生成'}</button>
+        <button onClick={startChapterExtract} disabled={!!extracting}
+          className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
+        >{extracting ? '提取中...' : '从章节提取'}</button>
+        <button onClick={startAiFill} disabled={!!genLoading}
+          className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
+        >{genLoading === cat ? '补全中...' : 'AI补全'}</button>
         {(genLoading || extracting) && (
-          <button onClick={handleCancel}
-            className="px-2 py-0.5 text-xs border border-danger text-danger rounded hover:bg-danger/10"
-          >⏹ 取消</button>
+          <button onClick={handleCancel} className="px-2 py-1 text-xs border border-danger text-danger rounded hover:bg-danger/10">⏹ 取消</button>
         )}
       </div>
 
+      {/* 章节提取输入 */}
+      {showChapterInput && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border">
+          <span className="text-xs text-text-secondary">从第</span>
+          <input value={chapterInputVal} onChange={e => setChapterInputVal(e.target.value)}
+            className="w-16 text-xs border border-border-input rounded px-2 py-0.5 focus:outline-none focus:border-primary" autoFocus
+            onKeyDown={e => { if (e.key === 'Enter') doChapterExtract(); if (e.key === 'Escape') setShowChapterInput(false) }} />
+          <span className="text-xs text-text-secondary">章提取</span>
+          <button onClick={doChapterExtract} className="px-2 py-0.5 text-xs bg-primary text-white rounded">确定</button>
+          <button onClick={() => setShowChapterInput(false)} className="px-2 py-0.5 text-xs border rounded">取消</button>
+        </div>
+      )}
+      {/* AI补全输入 */}
+      {showAiFillInput && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border">
+          <span className="text-xs text-text-secondary shrink-0">{CATS.find(c => c.key === cat)?.label}名称</span>
+          <input value={aiFillInputVal} onChange={e => setAiFillInputVal(e.target.value)}
+            className="flex-1 text-xs border border-border-input rounded px-2 py-0.5 focus:outline-none focus:border-primary" autoFocus
+            onKeyDown={e => { if (e.key === 'Enter') doAiFill(); if (e.key === 'Escape') setShowAiFillInput(false) }} />
+          <button onClick={doAiFill} className="px-2 py-0.5 text-xs bg-primary text-white rounded">确定</button>
+          <button onClick={() => setShowAiFillInput(false)} className="px-2 py-0.5 text-xs border rounded">取消</button>
+        </div>
+      )}
+
       {/* 添加表单 */}
       {showAdd && (
-        <div className="px-3 py-2 border-b border-border bg-bg-secondary/30 shrink-0 space-y-1.5">
+        <div className="px-3 py-2 border-b border-border shrink-0 space-y-1.5">
           <input value={newKey} onChange={e => setNewKey(e.target.value)}
-            placeholder={`${CATS.find(c => c.key === cat)?.label}名称（如：林辰）`} autoFocus
+            placeholder={`${CATS.find(c => c.key === cat)?.label}名称`} autoFocus
             className="w-full text-xs border border-border-input rounded px-2 py-1 focus:outline-none focus:border-primary" />
           <input value={newValue} onChange={e => setNewValue(e.target.value)}
-            placeholder="描述（如：主角，火木双灵根修士）"
+            placeholder="描述"
             className="w-full text-xs border border-border-input rounded px-2 py-1 focus:outline-none focus:border-primary" />
-          {cat === 'character' && (
-            <textarea value={newDetails} onChange={e => setNewDetails(e.target.value)}
-              placeholder='JSON扩展信息（可选）：{"personality":"冷静果敢","abilities":"剑术大师","role_type":"main"}'
-              rows={2}
-              className="w-full text-xs border border-border-input rounded px-2 py-1 resize-none focus:outline-none focus:border-primary" />
-          )}
           <div className="flex items-center gap-2">
             <label className="text-xs text-text-secondary flex items-center gap-1">
               <input type="checkbox" checked={newHard} onChange={e => setNewHard(e.target.checked)} /> 硬规则
@@ -397,55 +384,33 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
                     onClick={() => setExpandedId(isExpanded ? null : f.id)}>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className={`w-1.5 h-1.5 rounded-full ${f.is_hard_rule ? 'bg-red-500' : 'bg-gray-300'}`} />
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${f.is_hard_rule ? 'bg-red-500' : 'bg-gray-300'}`} />
                         <span className="text-xs font-medium text-text-main truncate">{f.fact_key}</span>
-                        {f.is_hard_rule ? (
-                          <span className="text-[10px] px-1 rounded bg-red-100 text-red-700">S1</span>
-                        ) : (
-                          <span className="text-[10px] px-1 rounded bg-gray-100 text-gray-500">软</span>
-                        )}
                         <span className="text-[10px] text-text-placeholder">{f.source}</span>
+                        {f.is_hard_rule
+                          ? <span className="text-[10px] px-1 rounded bg-red-100 text-red-700">硬</span>
+                          : <span className="text-[10px] px-1 rounded bg-gray-100 text-gray-500">软</span>}
                       </div>
                       <p className="text-xs text-text-secondary truncate">{f.fact_value}</p>
                     </div>
                     <div className="flex gap-1 ml-2 shrink-0">
                       <button onClick={(e) => { e.stopPropagation(); toggleHard(f) }}
-                        className="text-xs px-1 py-0.5 rounded border border-border-input hover:bg-bg-secondary"
-                        title={f.is_hard_rule ? '降为软设定' : '升为硬规则'}>{f.is_hard_rule ? '🔓' : '🔒'}</button>
+                        className="text-xs px-1.5 py-0.5 rounded border border-border-input hover:bg-bg-secondary"
+                        title={f.is_hard_rule ? '降为软设定' : '升为硬规则'}>{f.is_hard_rule ? '降' : '升'}</button>
                       <button onClick={(e) => { e.stopPropagation(); deleteFact(f.id) }}
-                        className="text-xs px-1 py-0.5 rounded border border-border-input hover:bg-red-50 text-text-placeholder hover:text-danger">🗑</button>
+                        className="text-xs px-1.5 py-0.5 rounded border border-border-input hover:bg-red-50 text-text-placeholder hover:text-danger">删</button>
                     </div>
                   </div>
 
                   {/* 展开详情 */}
                   {isExpanded && (
                     <div className="px-3 pb-2 space-y-1.5" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center gap-1.5 text-xs text-text-secondary">
-                        <span>{CATS.find(c => c.key === f.fact_category)?.icon} {CATS.find(c => c.key === f.fact_category)?.label}</span>
-                        {f.established_chapter != null && <span>· 📍 第{f.established_chapter}章</span>}
-                      </div>
-                      <textarea
-                        value={f.fact_value}
-                        onChange={e => updateFact(f.id, 'fact_value', e.target.value)}
+                      <textarea value={f.fact_value} onChange={e => updateFact(f.id, 'fact_value', e.target.value)}
                         rows={2}
-                        className="w-full text-xs border border-border-input rounded px-2 py-1 resize-none focus:outline-none focus:border-primary"
-                      />
-                      {cat === 'character' && details.personality && (
-                        <div className="text-xs text-text-secondary">
-                          <span className="text-text-placeholder">性格：</span>{details.personality}
-                          {details.abilities && <span className="ml-2"><span className="text-text-placeholder">能力：</span>{details.abilities}</span>}
-                          {details.role_type && <span className="ml-2"><span className="text-text-placeholder">类型：</span>{details.role_type}</span>}
-                        </div>
-                      )}
-                      {cat === 'setting' && (details.description || details.trigger_keywords) && (
-                        <div className="text-xs text-text-secondary">
-                          {details.description && <span>{details.description}</span>}
-                          {details.trigger_keywords && <span className="ml-2"><span className="text-text-placeholder">触发词：</span>{details.trigger_keywords}</span>}
-                        </div>
-                      )}
+                        className="w-full text-xs border border-border-input rounded px-2 py-1 resize-none focus:outline-none focus:border-primary" />
                       <div className="flex gap-1">
                         <button onClick={() => updateFact(f.id, 'details', JSON.stringify(details))}
-                          className="text-xs px-2 py-0.5 border border-border-input rounded hover:bg-bg-secondary">💾 保存编辑</button>
+                          className="text-xs px-2 py-0.5 border border-border-input rounded hover:bg-bg-secondary">保存</button>
                         <button onClick={() => setExpandedId(null)}
                           className="text-xs px-2 py-0.5 border border-border-input rounded hover:bg-bg-secondary">收起</button>
                       </div>

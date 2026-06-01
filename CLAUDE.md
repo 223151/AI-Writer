@@ -206,3 +206,4 @@ novel-ai-writer/
 | 10 | **单文件尽量控制在 400 行以内** | Workspace 1700 行 → 理解困难、容易出 bug | 抽取子组件、独立模块 |
 | 11 | **空 catch 必须注释原因** | 错误静默吞掉 → 排查无门 | `catch { /* 表可能不存在 */ }` 或 `catch (e) { showToast('error', e.message) }` |
 | 12 | **dev 模式不造假结果** | 假通过 → 线上才发现配置错误 | `if (!window.electronAPI) { showToast('error', '请在应用中运行'); return }` |
+| 13 | **跨组件键名必须一致** | SettingList 用 `character`，SettingDetail 用 `characters` → `data[key]` undefined → 白屏 | 提取共享常量：`export const CAT_KEYS = { characters: '角色', worlds: '世界观', ... }`，两端 import |

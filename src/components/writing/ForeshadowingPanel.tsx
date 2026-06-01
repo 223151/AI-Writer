@@ -53,6 +53,12 @@ export default function ForeshadowingPanel({ projectId, chapters }: Props) {
     loadItems()
   }
 
+  const deleteItem = async (id: number) => {
+    if (!window.electronAPI) return
+    await window.electronAPI.db.run('DELETE FROM foreshadowing_registry WHERE id = ?', [id])
+    loadItems()
+  }
+
   const filtered = items.filter(i => {
     if (filter === 'active') return !['resolved', 'expired'].includes(i.status)
     if (filter === 'resolved') return i.status === 'resolved'
@@ -66,10 +72,9 @@ export default function ForeshadowingPanel({ projectId, chapters }: Props) {
   return (
     <div className="h-full overflow-auto">
       {/* 统计头部 */}
-      <div className="flex items-center gap-3 px-4 py-2.5 bg-bg-secondary border-b border-border">
-        <span className="text-sm text-text-main font-medium">🪝 伏笔管理</span>
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border">
         <span className="text-xs text-text-secondary">
-          {items.length}个 · {resolvedCount}已回收 · {recoveryRate}%回收率
+          {items.length}个 · {resolvedCount}已回收 · {recoveryRate}%
         </span>
         <div className="flex-1" />
         <div className="flex gap-1">
@@ -110,15 +115,21 @@ export default function ForeshadowingPanel({ projectId, chapters }: Props) {
                       {STATUS_LABELS[item.status]}
                     </span>
                   </div>
-                  <select
-                    value={item.status}
-                    onChange={e => updateStatus(item.id, e.target.value as ForeshadowingStatus)}
-                    className="text-xs border border-border-input rounded px-1 py-0.5 bg-white"
-                  >
-                    {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
-                    ))}
-                  </select>
+                  <div className="flex items-center gap-1">
+                    <select
+                      value={item.status}
+                      onChange={e => updateStatus(item.id, e.target.value as ForeshadowingStatus)}
+                      className="text-xs border border-border-input rounded px-1 py-0.5 bg-white"
+                    >
+                      {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                        <option key={k} value={k}>{v}</option>
+                      ))}
+                    </select>
+                    <button onClick={() => deleteItem(item.id)}
+                      className="text-xs text-text-placeholder hover:text-danger transition-colors px-0.5"
+                      title="删除"
+                    >🗑</button>
+                  </div>
                 </div>
                 <p className="text-xs text-text-main mb-1.5">{item.description}</p>
                 <div className="flex flex-wrap gap-2 text-xs text-text-secondary">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { showToast } from '../common/Toast'
 import { useSettingStore } from '../../store/settingStore'
 import { SETTING_EXTRACTION_SYSTEM, SETTING_EXTRACTION_USER } from '../../services/settingExtractor'
@@ -16,16 +16,13 @@ const CATS: { key: CatKey; label: string; icon: string }[] = [
 export default function SettingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const initialCats = searchParams.get('cats')?.split(',') || ['characters', 'worlds', 'rules', 'relationships']
-
   const { libraries, load, updateData } = useSettingStore()
   const [running, setRunning] = useState(false)
   const [editField, setEditField] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showAddForm, setShowAddForm] = useState(false)
   const [addForm, setAddForm] = useState<Record<string, string>>({})
-  const [cat, setCat] = useState<CatKey>(initialCats[0] as CatKey || 'characters')
+  const [cat, setCat] = useState<CatKey>('characters')
   const cancelledRef = useRef(false)
   const runningRef = useRef(false)
 

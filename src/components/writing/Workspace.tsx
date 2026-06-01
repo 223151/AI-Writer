@@ -33,6 +33,17 @@ interface Volume {
   foreshadowing?: string
   foreshadowing_planted?: string[]
   foreshadowing_recovered?: string[]
+  // v1.3.0 卷纲优化新增字段
+  word_count_target?: number
+  connection_prev?: string
+  connection_next?: string
+  pacing_design?: string
+  emotional_cadence?: string
+  foreshadowing_plant?: string[]
+  foreshadowing_payoff?: string[]
+  foreshadowing_advance?: string
+  character_milestones?: { character: string; start_state: string; end_state: string; key_event: string }[]
+  conflict_nodes?: { description: string; chapter_segment: string; escalation_type: string }[]
 }
 interface ChapterPlan {
   chapter_number: number; title: string; summary: string
@@ -303,7 +314,7 @@ export default function Workspace() {
     setGenerating(true); setGenTarget('大纲')
     try {
       const { styleContext, disassemblyContext } = config
-        ? { ...buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies), cardContext: '' }
+        ? buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies)
         : await getRefs()
       // 读取设定库作为大纲参考
       let settingLibContext = ''
@@ -394,10 +405,65 @@ export default function Workspace() {
         }
       }
 
+      // 查询1: 事实簿硬规则
+      let canonFactsContext = ''
+      try {
+        const hardFacts = await window.electronAPI!.db.query(
+          "SELECT fact_category, fact_key, fact_value FROM canon_facts WHERE project_id = ? AND is_hard_rule = 1",
+          [Number(id)]
+        )
+        if (hardFacts.length > 0) {
+          canonFactsContext = hardFacts.map((f: any) =>
+            `- [${f.fact_category}] ${f.fact_key}: ${f.fact_value}`
+          ).join('\n')
+        }
+      } catch { /* canon_facts 表可能为空 */ }
+
+      // 查询2: 伏笔注册表状态
+      let foreshadowingStatus = ''
+      try {
+        const fsItems = await window.electronAPI!.db.query(
+          `SELECT foreshadow_id, description, status, priority, planted_chapter, target_chapter
+           FROM foreshadowing_registry
+           WHERE project_id = ? AND status IN ('planted','buried','planned')
+           ORDER BY priority DESC, target_chapter ASC`,
+          [Number(id)]
+        )
+        if (fsItems.length > 0) {
+          const statusLabels: Record<string, string> = { planted: '已埋', buried: '已加固', planned: '计划中' }
+          const statusLines = fsItems.map((f: any) =>
+            `- [${statusLabels[f.status] || f.status}|${f.priority}] ${f.foreshadow_id}: ${f.description} (目标第${f.target_chapter || '?'}章)`
+          )
+          foreshadowingStatus = `共 ${fsItems.length} 个活跃伏笔：\n${statusLines.join('\n')}`
+        }
+      } catch { /* foreshadowing_registry 表可能为空 */ }
+
+      // 查询3: 前卷各章实际执行结果（来自记录官摘要）
+      let prevVolOutcomes = ''
+      if (prevVol) {
+        try {
+          const prevSummaries = await window.electronAPI!.db.query(
+            `SELECT chapter_number, summary, key_events FROM chapter_summaries
+             WHERE project_id = ? AND chapter_number >= ? AND chapter_number <= ?
+             ORDER BY chapter_number`,
+            [Number(id), prevVol.chapter_range[0], prevVol.chapter_range[1]]
+          )
+          if (prevSummaries.length > 0) {
+            prevVolOutcomes = prevSummaries.map((s: any) => {
+              const events = typeof s.key_events === 'string' ? JSON.parse(s.key_events || '[]') : (s.key_events || [])
+              return `第${s.chapter_number}章: ${s.summary || '(无摘要)'} | 关键事件: ${Array.isArray(events) ? events.join('、') : events}`
+            }).join('\n')
+          }
+        } catch { /* chapter_summaries 可能尚无数据 */ }
+      }
+
       cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: VOLUME_OUTLINE_SYSTEM },
-        { role: 'user', content: VOLUME_OUTLINE_USER(enrichedOutline, total, nextVolNum, prevVolContext, prevChapterPlansStr) },
+        { role: 'user', content: VOLUME_OUTLINE_USER(
+          enrichedOutline, total, nextVolNum, prevVolContext, prevChapterPlansStr,
+          canonFactsContext, foreshadowingStatus, prevVolOutcomes
+        ) },
       ], '卷纲生成')
       if (cancelledRef.current) return
 
@@ -413,7 +479,7 @@ export default function Workspace() {
         volume_number: nextVolNum,
         title: vol.title || `第${nextVolNum}卷`,
         summary: vol.detailed_summary || vol.summary || '',
-        chapter_range: vol.chapter_range || [volumes.length > 0 ? volumes[volumes.length - 1].chapter_range[1] + 1 : 1, (volumes.length > 0 ? volumes[volumes.length - 1].chapter_range[1] : 0) + 12],
+        chapter_range: vol.chapter_range || [prevVol ? prevVol.chapter_range[1] + 1 : 1, prevVol ? prevVol.chapter_range[1] + 10 : 10],
         theme: vol.theme || '',
         key_events: [],
         detailed_summary: vol.detailed_summary || vol.summary,
@@ -421,6 +487,17 @@ export default function Workspace() {
         key_events_str: vol.key_events_str,
         emotional_curve: vol.emotional_curve,
         foreshadowing: vol.foreshadowing,
+        // v1.3.0 卷纲优化新增字段
+        word_count_target: vol.word_count_target,
+        connection_prev: vol.connection_prev,
+        connection_next: vol.connection_next,
+        pacing_design: vol.pacing_design,
+        emotional_cadence: vol.emotional_cadence,
+        foreshadowing_plant: vol.foreshadowing_plant,
+        foreshadowing_payoff: vol.foreshadowing_payoff,
+        foreshadowing_advance: vol.foreshadowing_advance,
+        character_milestones: vol.character_milestones,
+        conflict_nodes: vol.conflict_nodes,
       }
       const newVols = [...volumes, newVol]
       await saveVolumes(newVols)
@@ -441,7 +518,7 @@ export default function Workspace() {
     setGenerating(true)
     cancelledRef.current = false
     try {
-      const { styleContext, disassemblyContext } = getRefs()
+      const { styleContext, disassemblyContext } = await getRefs()
       const isFirstChapterInBook = chapNum === 1
       const isFirstChapterInVol = chapNum === vol.chapter_range[0]
 
@@ -528,7 +605,7 @@ export default function Workspace() {
 
     try {
       const { styleContext, disassemblyContext } = config
-        ? { ...buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies), cardContext: '' }
+        ? buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies)
         : await getRefs()
 
       // 找所在卷
@@ -914,7 +991,7 @@ export default function Workspace() {
 
   // 面板宽度
   const [leftWidth, setLeftWidth] = useState(192)
-  const [rightWidth, setRightWidth] = useState(288)
+  const [rightWidth, setRightWidth] = useState(334)
 
   // ========== 校对 ==========
   const handleReview = async () => {
@@ -1302,15 +1379,15 @@ export default function Workspace() {
       {/* ===== 右栏：工具面板 ===== */}
       <aside className="shrink-0 bg-white border-l border-border flex flex-col" style={{ width: rightWidth }}>
         {/* Tab 切换 */}
-        <div className="flex border-b border-border shrink-0 flex-wrap">
+        <div className="flex border-b border-border shrink-0">
           {(['outline', 'volumes', 'settings', 'foreshadowing', 'timeline', 'review'] as const).map(tab => (
             <button key={tab}
               onClick={() => setRightTab(tab)}
-              className={`py-2 px-2 text-xs font-medium transition-colors
+              className={`flex-1 py-1.5 text-[11px] font-medium transition-colors text-center
                 ${rightTab === tab ? 'text-primary border-b-2 border-primary' : 'text-text-secondary hover:text-text-main'}
               `}>
-              {{ outline: '📐 大纲', volumes: '📑 细纲', settings: '📖 设定',
-                 foreshadowing: '🪝 伏笔', timeline: '⏱ 时间线', review: '🔍 校对' }[tab]}
+              {{ outline: '大纲', volumes: '细纲', settings: '设定',
+                 foreshadowing: '伏笔', timeline: '时间线', review: '校对' }[tab]}
             </button>
           ))}
         </div>
@@ -1432,6 +1509,79 @@ export default function Workspace() {
                                 {vol.foreshadowing_recovered?.length ? <p>✅ 回收伏笔：{vol.foreshadowing_recovered.join('、')}</p> : null}
                               </div>
                             ) : null}
+                            {/* v1.3.0 卷纲优化新增显示 */}
+                            {vol.word_count_target ? (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">📊 字数目标</p>
+                                <p className="text-xs text-text-secondary">{vol.word_count_target.toLocaleString()} 字</p>
+                              </div>
+                            ) : null}
+                            {vol.connection_prev && (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">⬆️ 承上</p>
+                                <p className="text-xs text-text-secondary">{vol.connection_prev}</p>
+                              </div>
+                            )}
+                            {vol.connection_next && (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">⬇️ 启下</p>
+                                <p className="text-xs text-text-secondary">{vol.connection_next}</p>
+                              </div>
+                            )}
+                            {vol.pacing_design && (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">🎵 节奏设计</p>
+                                <p className="text-xs text-text-secondary whitespace-pre-wrap">{vol.pacing_design}</p>
+                              </div>
+                            )}
+                            {vol.emotional_cadence && (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">🎭 情绪节奏</p>
+                                <p className="text-xs text-text-secondary">{vol.emotional_cadence}</p>
+                              </div>
+                            )}
+                            {vol.foreshadowing_plant?.length ? (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">🪝 本卷新埋伏笔</p>
+                                {vol.foreshadowing_plant.map((fp, i) => (
+                                  <p key={i} className="text-xs text-text-secondary">• {fp}</p>
+                                ))}
+                              </div>
+                            ) : null}
+                            {vol.foreshadowing_payoff?.length ? (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">✅ 本卷回收伏笔</p>
+                                {vol.foreshadowing_payoff.map((fp, i) => (
+                                  <p key={i} className="text-xs text-text-secondary">• {fp}</p>
+                                ))}
+                              </div>
+                            ) : null}
+                            {vol.foreshadowing_advance && (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">🔗 伏笔推进</p>
+                                <p className="text-xs text-text-secondary">{vol.foreshadowing_advance}</p>
+                              </div>
+                            )}
+                            {vol.character_milestones?.length ? (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">👤 人物里程碑</p>
+                                {vol.character_milestones.map((cm, i) => (
+                                  <p key={i} className="text-xs text-text-secondary">
+                                    {cm.character}: {cm.start_state} → {cm.end_state}（{cm.key_event}）
+                                  </p>
+                                ))}
+                              </div>
+                            ) : null}
+                            {vol.conflict_nodes?.length ? (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">⚔️ 关键冲突节点</p>
+                                {vol.conflict_nodes.map((cn, i) => (
+                                  <p key={i} className="text-xs text-text-secondary">
+                                    [{cn.chapter_segment}] {cn.description}（{cn.escalation_type}）
+                                  </p>
+                                ))}
+                              </div>
+                            ) : null}
                             <div className="flex gap-1.5 flex-wrap">
                               <button
                                 onClick={async () => {
@@ -1447,7 +1597,32 @@ export default function Workspace() {
                               <button
                                 onClick={() => setFullView({
                                   title: vol.title,
-                                  content: `# ${vol.title}\n\n**主题**：${vol.theme}\n**章节范围**：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章\n\n**剧情详述**：${vol.detailed_summary || vol.summary}\n\n**角色弧线**：${vol.character_arcs || '—'}\n\n**情感曲线**：${vol.emotional_curve || '—'}\n\n**关键事件**：${vol.key_events.map(e => typeof e === 'string' ? e : `${e.event} (${e.chapters})`).join('、')}\n\n${vol.foreshadowing_planted?.length ? '**🪝 新伏笔**：' + vol.foreshadowing_planted.join('、') + '\n\n' : ''}${vol.foreshadowing_recovered?.length ? '**✅ 回收伏笔**：' + vol.foreshadowing_recovered.join('、') + '\n\n' : ''}## 本卷章节细纲\n\n${volPlans.map(p => `### 第${p.chapter_number}章 ${p.title}\n${p.summary}\n人物：${p.characters.join('、')}\n事件：${p.key_events.join('、')}\n字数：${p.estimated_words}\n`).join('\n')}`
+                                  content: [
+                                    `# ${vol.title}`,
+                                    `**主题**：${vol.theme}`,
+                                    `**章节范围**：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章`,
+                                    vol.word_count_target ? `**字数目标**：${vol.word_count_target.toLocaleString()} 字` : '',
+                                    vol.connection_prev ? `**承上**：${vol.connection_prev}` : '',
+                                    vol.connection_next ? `**启下**：${vol.connection_next}` : '',
+                                    '',
+                                    `**剧情详述**：${vol.detailed_summary || vol.summary}`,
+                                    vol.pacing_design ? `**节奏设计**：${vol.pacing_design}` : '',
+                                    vol.emotional_cadence ? `**情绪节奏**：${vol.emotional_cadence}` : '',
+                                    vol.character_arcs ? `**角色弧线**：${vol.character_arcs}` : '',
+                                    vol.emotional_curve ? `**情感曲线**：${vol.emotional_curve}` : '',
+                                    `**关键事件**：${vol.key_events.join('、')}`,
+                                    '',
+                                    vol.character_milestones?.length ? `**人物里程碑**：\n${vol.character_milestones.map(cm => `- ${cm.character}: ${cm.start_state} → ${cm.end_state} (${cm.key_event})`).join('\n')}` : '',
+                                    vol.conflict_nodes?.length ? `**关键冲突节点**：\n${vol.conflict_nodes.map(cn => `- [${cn.chapter_segment}] ${cn.description} (${cn.escalation_type})`).join('\n')}` : '',
+                                    vol.foreshadowing_plant?.length ? `**🪝 本卷新埋**：${vol.foreshadowing_plant.join('、')}` : '',
+                                    vol.foreshadowing_payoff?.length ? `**✅ 本卷回收**：${vol.foreshadowing_payoff.join('、')}` : '',
+                                    vol.foreshadowing_advance ? `**🔗 伏笔推进**：${vol.foreshadowing_advance}` : '',
+                                    vol.foreshadowing_planted?.length ? `**🪝 新伏笔**：${vol.foreshadowing_planted.join('、')}` : '',
+                                    vol.foreshadowing_recovered?.length ? `**✅ 回收伏笔**：${vol.foreshadowing_recovered.join('、')}` : '',
+                                    '',
+                                    '## 本卷章节细纲',
+                                    ...volPlans.map(p => `### 第${p.chapter_number}章 ${p.title}\n${p.summary}\n人物：${p.characters.join('、')}\n事件：${p.key_events.join('、')}\n字数：${p.estimated_words}`)
+                                  ].filter(Boolean).join('\n\n')
                                 })}
                                 className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary"
                               >📖 查看完整</button>

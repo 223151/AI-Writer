@@ -269,7 +269,16 @@ function createTables(): void {
   try { db.run('DROP TABLE IF EXISTS world_settings') } catch {}
 
   // 设定库
-  try { db.run('CREATE TABLE IF NOT EXISTS setting_libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, source_text TEXT NOT NULL DEFAULT \'\', setting_data TEXT NOT NULL DEFAULT \'{}\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')))') } catch {}
+  try {
+    db.run('CREATE TABLE IF NOT EXISTS setting_libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, source_text TEXT NOT NULL DEFAULT \'\', setting_data TEXT NOT NULL DEFAULT \'{}\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')))')
+    // 验证表存在
+    const test = db.exec('SELECT name FROM sqlite_master WHERE type=\'table\' AND name=\'setting_libraries\'')
+    if (test.length === 0 || test[0].values.length === 0) {
+      console.error('FAILED to create setting_libraries table!')
+    }
+  } catch (e) {
+    console.error('Error creating setting_libraries:', e)
+  }
 
   // 插入默认设置
   db.run(`
@@ -307,7 +316,22 @@ export function run(sql: string, params?: any[]): { changes: number; lastInsertR
   if (!db) throw new Error('Database not initialized')
   db.run(sql, params)
   saveToDisk()
-  const lastId = (db.exec("SELECT last_insert_rowid() AS id"))[0]?.values[0]?.[0] as number || 0
+  let lastId = 0
+  try {
+    const r = db.exec("SELECT last_insert_rowid() AS id")
+    if (r.length > 0 && r[0].values.length > 0) lastId = r[0].values[0][0] as number || 0
+  } catch {}
+  // Fallback: if last_insert_rowid() returns 0, try to get the max id
+  if (lastId === 0 && sql.trim().toUpperCase().startsWith('INSERT')) {
+    try {
+      // Extract table name from INSERT INTO "table" ...
+      const m = sql.match(/INSERT\s+INTO\s+["'`]?(\w+)/i)
+      if (m) {
+        const r = db.exec(`SELECT MAX(id) AS mid FROM ${m[1]}`)
+        if (r.length > 0 && r[0].values.length > 0) lastId = r[0].values[0][0] as number || 0
+      }
+    } catch {}
+  }
   return {
     changes: db.getRowsModified(),
     lastInsertRowid: lastId,

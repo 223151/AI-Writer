@@ -38,10 +38,10 @@ export const useSettingStore = create<SettingStoreState>((set, get) => ({
       if (window.electronAPI) {
         const result = await window.electronAPI.db.run(
           'INSERT INTO setting_libraries (name, source_text) VALUES (?, ?)',
-          [name, sourceText]
+          [name, sourceText || '']
         )
         await get().load()
-        return result.lastInsertRowid
+        return result.lastInsertRowid || result.changes
       }
       return null
     } catch { return null }

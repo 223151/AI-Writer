@@ -39,6 +39,12 @@ export default function TimelinePanel({ projectId, chapters }: Props) {
     finally { setLoading(false) }
   }, [projectId])
 
+  const deleteEvent = async (id: number) => {
+    if (!window.electronAPI) return
+    await window.electronAPI.db.run('DELETE FROM story_timeline WHERE id = ?', [id])
+    loadEvents()
+  }
+
   useEffect(() => { loadEvents() }, [loadEvents])
 
   // Collect all character names
@@ -61,9 +67,8 @@ export default function TimelinePanel({ projectId, chapters }: Props) {
 
   return (
     <div className="h-full overflow-auto">
-      <div className="flex items-center gap-2 px-4 py-2.5 bg-bg-secondary border-b border-border flex-wrap">
-        <span className="text-sm text-text-main font-medium">⏱ 时间线</span>
-        <span className="text-xs text-text-secondary">{events.length} 个事件</span>
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border flex-wrap">
+        <span className="text-xs text-text-secondary">{events.length} 事件</span>
         <div className="flex-1" />
         <select value={typeFilter} onChange={e => setTypeFilter(e.target.value as TimelineEventType | '')}
           className="text-xs border border-border-input rounded px-1.5 py-0.5"
@@ -117,7 +122,7 @@ export default function TimelinePanel({ projectId, chapters }: Props) {
                     </span>
                   </div>
                 )}
-                <div className="relative pb-3 ml-2">
+                <div className="relative pb-3 ml-2 group">
                   <div className="w-2 h-2 rounded-full absolute border-2 border-white"
                     style={{ background: color, left: '-3px', top: '4px' }} />
                   <div className="flex items-center gap-1.5 mb-0.5">
@@ -136,6 +141,10 @@ export default function TimelinePanel({ projectId, chapters }: Props) {
                       <span>👤 {event.characters_involved.join('、')}</span>
                     )}
                   </div>
+                  <button onClick={() => deleteEvent(event.id)}
+                    className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 text-xs text-text-placeholder hover:text-danger transition-all"
+                    title="删除"
+                  >🗑</button>
                 </div>
               </div>
             )
