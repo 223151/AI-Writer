@@ -192,99 +192,17 @@ novel-ai-writer/
 
 ## 代码规范（必读）
 
-### 1. AI 调用取消支持 — 每条 AI 调用必须满足 3 条
-
-任何调用 `window.electronAPI.aiChat()` 或 `aiChatStream()` 的代码**必须**：
-
-```typescript
-// ① 取消 ref + 卸载清理
-const cancelledRef = useRef(false)
-const loadingRef = useRef(false)        // 跟踪 AI 是否在运行
-useEffect(() => { loadingRef.current = loading }, [loading])  // 同步到 ref
-useEffect(() => { return () => {        // 卸载时取消（点其他窗口 = 取消）
-  if (loadingRef.current) { cancelledRef.current = true; window.electronAPI?.cancelAi() }
-}}, [])
-
-// ② 取消按钮
-const handleCancel = () => { cancelledRef.current = true; window.electronAPI?.cancelAi() }
-// 在 loading UI 中显示: <button onClick={handleCancel}>⏹ 取消</button>
-
-// ③ AI 调用后检查 + catch 区分"已取消"
-cancelledRef.current = false
-const reply = await window.electronAPI.aiChat(messages, '用途')
-if (cancelledRef.current) return
-// ...
-} catch (e: any) {
-  if (cancelledRef.current) showToast('info', '已取消XXX')    // 取消 → info
-  else showToast('error', 'XXX失败：' + e.message)             // 错误 → error
-}
-```
-
-**检查清单**：每个 AI 调用 → 取消按钮 ✅ 卸载清理 ✅ "已取消"提示 ✅
-
-### 2. 变量作用域 — 跨 try 块的变量必须先声明
-
-```typescript
-// ❌ 错误：allFacts 在另一个 try 块中定义
-try { allFacts.filter(...) } catch {}  // ReferenceError!
-try { const allFacts = await query() } catch {}
-
-// ✅ 正确：先声明再使用
-let allFacts: any[] = []
-try { allFacts = await query() } catch {}
-try { allFacts.filter(...) } catch {}  // 即使为空数组也不会崩溃
-```
-
-### 3. JSON.parse 返回值必须判空
-
-```typescript
-let obj: any
-try { obj = JSON.parse(str) } catch {}
-// ❌ 直接使用：obj.title → TypeError if obj is undefined
-// ✅ 先判空：if (!obj) { showToast('error', '格式异常'); return }
-```
-
-### 4. sanitizeText / sanitizeMessages — 只删异常转义，不删合法反斜杠
-
-```typescript
-// ❌ 删除所有反斜杠 → 破坏 \n、JSON转义、代码示例
-.replace(/\\/g, '')
-
-// ✅ 只删除异常的 hex 转义序列（\xNN、\uXXXX 不完整形式）
-.replace(/\\[xX][0-9a-fA-F]{0,2}/g, '')
-.replace(/\\u[0-9a-fA-F]{0,4}/g, '')
-```
-
-### 5. 数据库删除必须级联清理关联表
-
-删除章节时同步清理：`chapter_summaries`、`story_timeline`、`character_arc_log`、`relationship_timeline`
-
-sql.js 默认不启用外键约束，需要在 `createTables()` 开头执行：
-```sql
-PRAGMA foreign_keys = ON
-```
-
-### 6. 类型定义必须一致
-
-`src/types/index.ts` 是唯一的类型定义来源。不要在组件中重复定义同名接口（如 `ChapterPlan`）。如果类型缺少字段，在 types/index.ts 中添加，然后用 `import type` 引用。
-
-### 7. 避免重复的状态系统
-
-不要为同一个功能维护两套状态（如 `genConfig` + `showGenPanel`）。删除旧状态前确认所有引用已迁移。
-
-### 8. 提示词中禁止使用智能引号
-
-编辑 JSX 的 `placeholder`、`className` 等属性时，确保使用普通引号 `"..."` 而非智能引号 `"..."`。智能引号会导致 JSX 编译失败。
-
-### 9. JSON 默认值必须防御空对象 `{}`
-
-数据库 TEXT 字段的默认值 `'{}'` 经 `JSON.parse` 后是空对象 `{}`，`||` 运算符认为它是真值。
-
-```typescript
-// ❌ 错误：{} 是 truthy，回退不生效 → data.characters 是 undefined → 崩溃
-const data = obj.field || { characters: [], worlds: [] }
-
-// ✅ 正确：展开默认值覆盖空对象
-const raw = obj.field || {}
-const data = { characters: (raw as any).characters || [], worlds: (raw as any).worlds || [] }
-```
+| # | 规则 | 防止的 bug | 示例 |
+|---|------|-----------|------|
+| 1 | **变量不跨 try 块使用** | `allFacts` undefined → 功能静默失效 | `let x: any[] = []; try { x = await query() } catch {}; try { x.filter(...) } catch {}` |
+| 2 | **禁止 `.replace(/\\/g, '')`** | 删除所有反斜杠 → 破坏 AI prompt（`\n`、JSON转义） | `.replace(/\\[xX][0-9a-fA-F]{0,2}/g, '')` 只删异常 hex 转义 |
+| 3 | **JSON.parse 后必须判空 + return** | 访问 undefined.title → 白屏崩溃 | `if (!obj) { showToast('error', '格式异常'); return }` |
+| 4 | **JSON 默认值展开（防御空对象）** | `{}` 是 truthy → `\|\|` 回退失效 → 访 问 undefined.length 崩溃 | `const d = { chars: (raw as any).chars \|\| [], worlds: (raw as any).worlds \|\| [] }` |
+| 5 | **PRAGMA foreign_keys = ON** | CASCADE 不生效 → 删项目后关联数据残留 | `db.run('PRAGMA foreign_keys = ON')` |
+| 6 | **删除操作清理所有关联表** | 孤儿数据 → 统计不准、时间线显示不存在的章 | 删章节时同步删 `chapter_summaries/story_timeline/character_arc_log/relationship_timeline` |
+| 7 | **每个 AI 调用必须有取消三件套** | 无法取消 → 用户等死 / 点其他窗口弹错误 | ① `cancelledRef` + `useEffect` 卸载清理 ② 取消按钮 ③ catch 里 `if (cancelledRef) showToast('info','已取消') else showToast('error',...)` |
+| 8 | **state 变更必须同步写 DB** | 切换页面/刷新 → 用户选择白费 | 如风格库/拆文库的选择要持久化到 `novel_projects` 表 |
+| 9 | **类型定义只在 `src/types/index.ts`** | 两个 `ChapterPlan` 定义不一致 → 到处 `as any` | 组件内用 `import type` 引用，字段缺失就在 types 里加 |
+| 10 | **单文件尽量控制在 400 行以内** | Workspace 1700 行 → 理解困难、容易出 bug | 抽取子组件、独立模块 |
+| 11 | **空 catch 必须注释原因** | 错误静默吞掉 → 排查无门 | `catch { /* 表可能不存在 */ }` 或 `catch (e) { showToast('error', e.message) }` |
+| 12 | **dev 模式不造假结果** | 假通过 → 线上才发现配置错误 | `if (!window.electronAPI) { showToast('error', '请在应用中运行'); return }` |
