@@ -32,7 +32,7 @@ export default function ProjectList() {
         setModalOpen(false)
         setTitle('')
         setDescription('')
-        navigate(`/project/${newId}/prepare`)
+        navigate(`/project/${newId}/workspace`)
       } else {
         showToast('info', `项目「${title}」已记录（开发模式）`)
         setModalOpen(false)
