@@ -1269,10 +1269,6 @@ export default function Workspace() {
       {/* ===== 左栏：章节目录 ===== */}
       <aside className="shrink-0 bg-bg-secondary/50 flex flex-col" style={{ width: leftCollapsed ? 36 : leftWidth }}>
         <div className="px-2 py-2.5 border-b border-border bg-bg-secondary flex items-center gap-1">
-          <button onClick={() => setLeftCollapsed(!leftCollapsed)}
-            className="text-xs text-text-placeholder hover:text-text-main shrink-0 w-5 h-5 flex items-center justify-center"
-            title={leftCollapsed ? '展开目录' : '折叠目录'}
-          >{leftCollapsed ? '▶' : '◀'}</button>
           {!leftCollapsed && <button onClick={() => navigate('/')} className="text-xs text-text-secondary hover:text-primary">← 返回</button>}
           {!leftCollapsed && renaming ? (
             <input
@@ -1288,6 +1284,10 @@ export default function Workspace() {
               {project.title}
             </h2> : null
           )}
+          <button onClick={() => setLeftCollapsed(!leftCollapsed)}
+            className="text-xs text-text-placeholder hover:text-text-main shrink-0 w-5 h-5 flex items-center justify-center ml-auto"
+            title={leftCollapsed ? '展开目录' : '折叠目录'}
+          >{leftCollapsed ? '▶' : '◀'}</button>
         </div>
         {!leftCollapsed && <>
           <div className="flex-1 overflow-auto py-1">
