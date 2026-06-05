@@ -994,7 +994,7 @@ export default function Workspace() {
       await saveChapterPlans(merged)
       showToast('success', `第${chapNum}章细纲已生成：${newPlan.title}`)
     } catch (e: any) {
-      if (cancelledRef.current) showToast('info', '已取消生成')
+      if (cancelledRef.current) { showToast('info', '已取消生成'); throw e }
       else showToast('error', `第${chapNum}章细纲生成失败：${e.message || '未知错误'}`)
     } finally {
       setGenerating(false)

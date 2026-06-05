@@ -104,7 +104,7 @@ export default function VolumePanel({
                       <MoreFields vol={vol} />
                     )}
                     <div className="flex gap-0.5 flex-wrap">
-                      <button onClick={async () => { for (let c = vol.chapter_range[0]; c <= vol.chapter_range[1]; c++) { if (!chapterPlans.find(p => p.chapter_number === c)) await genSingleChapterPlan(c) } }}
+                      <button onClick={async () => { try { for (let c = vol.chapter_range[0]; c <= vol.chapter_range[1]; c++) { if (!chapterPlans.find(p => p.chapter_number === c)) await genSingleChapterPlan(c) } } catch {} }}
                         disabled={generating} className="flex-none px-1.5 py-0 text-xs bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50">生成全卷</button>
                       <button onClick={() => {
                         const exportVol: any = {}
