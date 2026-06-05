@@ -899,6 +899,27 @@ export default function Workspace() {
 概要：${vol.summary} | 主题：${vol.theme}
 章节范围：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章`
 
+      // 找到章节所在的节点，注入节点级约束
+      let nodeContext = ''
+      const volNodes = (vol as any).nodes || []
+      if (volNodes.length > 0) {
+        const curNode = volNodes.find((n: any) => {
+          const seg = n.chapter_segment || ''
+          const m = seg.match(/第?(\d+)[-–—至到]第?(\d+)/)
+          if (m) return chapNum >= parseInt(m[1]) && chapNum <= parseInt(m[2])
+          return false
+        })
+        if (curNode) {
+          nodeContext = `\n【当前节点：${curNode.name}（${curNode.chapter_segment}）】
+节点任务：${curNode.task}
+节点内容：${curNode.content || '（无）'}
+节奏：${curNode.pacing || '中'}`
+          if (curNode.node_forbidden) nodeContext += `\n⛔ 节点禁区：${curNode.node_forbidden}`
+          if (curNode.emotion_limit) nodeContext += `\n💕 感情限制：${curNode.emotion_limit}`
+          if (curNode.info_quota) nodeContext += `\n🔐 信息配额：${curNode.info_quota}`
+        }
+      }
+
       const prevContentExcerpt = prevChapter?.content
         ? `\n【上一章正文结尾（${prevChapter.content.length}字）】\n${prevChapter.content.slice(-400)}\n（确保本章起点和上章结尾衔接）`
         : ''
@@ -919,8 +940,9 @@ export default function Workspace() {
             : `（上一章细纲尚未生成，请基于大纲和卷纲独立设计本章）${prevContentExcerpt}`
 
       const promptParts = [
-        outlineContent.slice(0, 1500),
+        outlineContent.slice(0, 3000),
         volContext,
+        nodeContext,
         prevContext,
         styleContext ? '【风格】\n' + styleContext : '',
         disassemblyContext ? '【拆文】\n' + disassemblyContext.slice(0, 1000) : '',
