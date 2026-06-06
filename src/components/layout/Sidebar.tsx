@@ -77,7 +77,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </nav>
 
       <div className="text-center py-2 text-xxs text-text-placeholder border-t border-border">
-        v2.1.0
+        v2.2.0
       </div>
     </aside>
   )

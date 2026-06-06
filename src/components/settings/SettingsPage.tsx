@@ -221,7 +221,7 @@ export default function SettingsPage() {
       {/* 版本更新 */}
       <div className="bg-white rounded-card border border-border p-5 max-w-lg mt-4">
         <h2 className="text-lg text-text-main mb-3">🔄 版本更新</h2>
-        <p className="text-base text-text-secondary mb-3">当前版本：{updateInfo?.currentVersion || 'v2.1.0'}</p>
+        <p className="text-base text-text-secondary mb-3">当前版本：{updateInfo?.currentVersion || 'v2.2.0'}</p>
         <button
           onClick={checkUpdate}
           disabled={checking}
